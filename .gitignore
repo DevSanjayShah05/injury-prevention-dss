@@ -1,0 +1,19 @@
+# macOS
+.DS_Store
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Python venv (if/when you create it)
+backend/.venv/
+
+# Node / React
+frontend/node_modules/
+frontend/dist/
+
+# Environment variables
+.env
+
+# Logs
+*.log

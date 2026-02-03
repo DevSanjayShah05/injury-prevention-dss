@@ -1,0 +1,122 @@
+from fastapi import FastAPI
+from pydantic import BaseModel, Field
+from typing import Literal, List
+
+app = FastAPI(title="Injury Prevention DSS", version="0.1.0")
+
+
+class AssessmentRequest(BaseModel):
+    training_days_per_week: int = Field(ge=0, le=7)
+    session_minutes: int = Field(ge=0, le=300)
+    rpe: int = Field(ge=1, le=10)  # intensity proxy
+    weekly_sets: int = Field(ge=0, le=300)
+    rest_days_per_week: int = Field(ge=0, le=7)
+    sleep_hours: float = Field(ge=0, le=16)
+    pain_score: int = Field(ge=0, le=10)
+    pain_location: Literal["none", "shoulder", "wrist", "elbow", "knee", "lower_back", "other"] = "none"
+    experience_level: Literal["beginner", "intermediate", "advanced"]
+
+
+class AssessmentResponse(BaseModel):
+    risk_score: int
+    risk_level: Literal["low", "moderate", "high"]
+    top_factors: List[str]
+    recommendations: List[str]
+
+
+def calculate_risk_and_advice(req: AssessmentRequest) -> AssessmentResponse:
+    # v0: simple baseline logic (we’ll refine the scoring in next steps)
+    score = 0
+    factors = []
+
+    # Pain is a strong signal
+    if req.pain_score >= 7:
+        score += 45
+        factors.append("High pain score reported (7+).")
+    elif req.pain_score >= 4:
+        score += 25
+        factors.append("Moderate pain score reported (4–6).")
+    elif req.pain_score >= 1:
+        score += 10
+        factors.append("Mild pain score reported (1–3).")
+
+    # Volume + intensity
+    if req.weekly_sets >= 120:
+        score += 20
+        factors.append("Very high weekly training volume (sets).")
+    elif req.weekly_sets >= 80:
+        score += 12
+        factors.append("High weekly training volume (sets).")
+
+    if req.rpe >= 9:
+        score += 18
+        factors.append("Very high intensity (RPE 9–10).")
+    elif req.rpe >= 7:
+        score += 10
+        factors.append("High intensity (RPE 7–8).")
+
+    # Recovery
+    if req.sleep_hours < 6:
+        score += 12
+        factors.append("Low sleep duration (<6 hours).")
+    elif req.sleep_hours < 7:
+        score += 6
+        factors.append("Below-optimal sleep duration (6–7 hours).")
+
+    if req.rest_days_per_week <= 1 and req.training_days_per_week >= 5:
+        score += 10
+        factors.append("Low rest relative to training frequency.")
+
+    # Experience adjustment
+    if req.experience_level == "beginner" and req.rpe >= 8:
+        score += 8
+        factors.append("High intensity for beginner level.")
+
+    # Cap score to 0–100
+    score = max(0, min(100, score))
+
+    # Risk level
+    if score >= 70:
+        level = "high"
+    elif score >= 35:
+        level = "moderate"
+    else:
+        level = "low"
+
+    # Recommendations (v0)
+    recs = []
+    if req.pain_score >= 7:
+        recs.append("Stop aggravating movements and consider consulting a medical professional if pain persists.")
+    if req.pain_location != "none" and req.pain_score >= 4:
+        recs.append(f"Modify training to reduce load on the {req.pain_location.replace('_', ' ')} and prioritize technique.")
+    if req.weekly_sets >= 80:
+        recs.append("Reduce weekly volume by 10–25% for 1–2 weeks (deload) and reassess symptoms.")
+    if req.rpe >= 8:
+        recs.append("Lower intensity for the next 3–7 days (aim RPE 6–7) and avoid grinding reps.")
+    if req.sleep_hours < 7:
+        recs.append("Aim for 7–9 hours of sleep to improve recovery and reduce injury risk.")
+    if req.rest_days_per_week <= 1 and req.training_days_per_week >= 5:
+        recs.append("Add 1 additional rest day per week to improve recovery capacity.")
+
+    if not recs:
+        recs.append("Maintain current plan; continue gradual progression and monitor any discomfort.")
+
+    # Top factors: take up to 3
+    top = factors[:3] if factors else ["No major risk factors detected from provided inputs."]
+
+    return AssessmentResponse(
+        risk_score=score,
+        risk_level=level,
+        top_factors=top,
+        recommendations=recs,
+    )
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+@app.post("/assess", response_model=AssessmentResponse)
+def assess(req: AssessmentRequest):
+    return calculate_risk_and_advice(req)
