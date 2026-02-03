@@ -3,6 +3,25 @@ import "./App.css";
 
 const API_BASE = "http://127.0.0.1:8000";
 
+function riskTheme(level) {
+  switch (level) {
+    case "low":
+      return { bg: "#e7f7ee", border: "#b7ebc6", text: "#0f5132" }; // green-ish
+    case "moderate":
+      return { bg: "#fff8e6", border: "#ffe2a8", text: "#664d03" }; // yellow-ish
+    case "high":
+      return { bg: "#fdecec", border: "#f5c2c7", text: "#842029" }; // red-ish
+    default:
+      return { bg: "#f1f3f5", border: "#dee2e6", text: "#212529" };
+  }
+}
+
+function scoreTheme(score) {
+  if (score >= 70) return riskTheme("high");
+  if (score >= 35) return riskTheme("moderate");
+  return riskTheme("low");
+}
+
 export default function App() {
   const [form, setForm] = useState({
     training_days_per_week: 4,
@@ -196,12 +215,67 @@ export default function App() {
       {result && (
         <div style={{ marginTop: 20, padding: 16, border: "1px solid #ddd", borderRadius: 10 }}>
           <h2>Result</h2>
-          <p>
-            <strong>Risk score:</strong> {result.risk_score} / 100
-          </p>
-          <p>
-            <strong>Risk level:</strong> {result.risk_level.toUpperCase()}
-          </p>
+        
+         {/* Risk level badge */}
+<div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+  <p style={{ margin: 0 }}>
+    <strong>Risk level:</strong>
+  </p>
+
+  <span
+    style={{
+      padding: "4px 10px",
+      borderRadius: 999,
+      border: `1px solid ${riskTheme(result.risk_level).border}`,
+      background: riskTheme(result.risk_level).bg,
+      color: riskTheme(result.risk_level).text,
+      fontWeight: 700,
+      letterSpacing: 0.4,
+    }}
+  >
+    {result.risk_level.toUpperCase()}
+  </span>
+</div>
+
+{/* Risk score bar */}
+<div style={{ marginTop: 12 }}>
+  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+    <span style={{ fontWeight: 700 }}>Risk score</span>
+    <span>{result.risk_score} / 100</span>
+  </div>
+
+  <div
+    style={{
+      height: 12,
+      background: "#f1f3f5",
+      borderRadius: 999,
+      overflow: "hidden",
+      border: "1px solid #dee2e6",
+    }}
+  >
+    <div
+      style={{
+        width: `${result.risk_score}%`,
+        height: "100%",
+        background: scoreTheme(result.risk_score).border,
+      }}
+    />
+  </div>
+
+  <div
+    style={{
+      display: "flex",
+      justifyContent: "space-between",
+      fontSize: 12,
+      opacity: 0.7,
+      marginTop: 6,
+    }}
+  >
+    <span>Low (0–34)</span>
+    <span>Moderate (35–69)</span>
+    <span>High (70–100)</span>
+  </div>
+</div>
 
           <h3>Top factors</h3>
           <ul>
