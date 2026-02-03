@@ -1,14 +1,23 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import Literal, List
+from typing import List, Literal
 
 app = FastAPI(title="Injury Prevention DSS", version="0.1.0")
 
+# CORS so React can call this API
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class AssessmentRequest(BaseModel):
     training_days_per_week: int = Field(ge=0, le=7)
     session_minutes: int = Field(ge=0, le=300)
-    rpe: int = Field(ge=1, le=10)  # intensity proxy
+    rpe: int = Field(ge=1, le=10)
     weekly_sets: int = Field(ge=0, le=300)
     rest_days_per_week: int = Field(ge=0, le=7)
     sleep_hours: float = Field(ge=0, le=16)
@@ -16,18 +25,15 @@ class AssessmentRequest(BaseModel):
     pain_location: Literal["none", "shoulder", "wrist", "elbow", "knee", "lower_back", "other"] = "none"
     experience_level: Literal["beginner", "intermediate", "advanced"]
 
-
 class AssessmentResponse(BaseModel):
     risk_score: int
     risk_level: Literal["low", "moderate", "high"]
     top_factors: List[str]
     recommendations: List[str]
 
-
 def calculate_risk_and_advice(req: AssessmentRequest) -> AssessmentResponse:
-    # v0: simple baseline logic (we’ll refine the scoring in next steps)
     score = 0
-    factors = []
+    factors: List[str] = []
 
     # Pain is a strong signal
     if req.pain_score >= 7:
@@ -40,7 +46,7 @@ def calculate_risk_and_advice(req: AssessmentRequest) -> AssessmentResponse:
         score += 10
         factors.append("Mild pain score reported (1–3).")
 
-    # Volume + intensity
+    # Volume
     if req.weekly_sets >= 120:
         score += 20
         factors.append("Very high weekly training volume (sets).")
@@ -48,6 +54,7 @@ def calculate_risk_and_advice(req: AssessmentRequest) -> AssessmentResponse:
         score += 12
         factors.append("High weekly training volume (sets).")
 
+    # Intensity
     if req.rpe >= 9:
         score += 18
         factors.append("Very high intensity (RPE 9–10).")
@@ -75,16 +82,16 @@ def calculate_risk_and_advice(req: AssessmentRequest) -> AssessmentResponse:
     # Cap score to 0–100
     score = max(0, min(100, score))
 
-    # Risk level
+    # Risk level bands
     if score >= 70:
-        level = "high"
+        level: Literal["low", "moderate", "high"] = "high"
     elif score >= 35:
         level = "moderate"
     else:
         level = "low"
 
-    # Recommendations (v0)
-    recs = []
+    # Recommendations
+    recs: List[str] = []
     if req.pain_score >= 7:
         recs.append("Stop aggravating movements and consider consulting a medical professional if pain persists.")
     if req.pain_location != "none" and req.pain_score >= 4:
@@ -101,7 +108,6 @@ def calculate_risk_and_advice(req: AssessmentRequest) -> AssessmentResponse:
     if not recs:
         recs.append("Maintain current plan; continue gradual progression and monitor any discomfort.")
 
-    # Top factors: take up to 3
     top = factors[:3] if factors else ["No major risk factors detected from provided inputs."]
 
     return AssessmentResponse(
@@ -111,11 +117,9 @@ def calculate_risk_and_advice(req: AssessmentRequest) -> AssessmentResponse:
         recommendations=recs,
     )
 
-
 @app.get("/health")
 def health():
     return {"status": "ok"}
-
 
 @app.post("/assess", response_model=AssessmentResponse)
 def assess(req: AssessmentRequest):
