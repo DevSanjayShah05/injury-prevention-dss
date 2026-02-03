@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import List, Literal
+from typing import List, Literal, Dict
 
 app = FastAPI(title="Injury Prevention DSS", version="0.1.0")
 
@@ -30,53 +30,74 @@ class AssessmentResponse(BaseModel):
     risk_level: Literal["low", "moderate", "high"]
     top_factors: List[str]
     recommendations: List[str]
-
+    score_breakdown: Dict[str, int]
 def calculate_risk_and_advice(req: AssessmentRequest) -> AssessmentResponse:
     score = 0
     factors: List[str] = []
 
+    breakdown: Dict[str, int] = {
+    "pain": 0,
+    "volume": 0,
+    "intensity": 0,
+    "sleep": 0,
+    "rest": 0,
+    "experience": 0,
+}
+
     # Pain is a strong signal
     if req.pain_score >= 7:
         score += 45
+        breakdown["pain"] += 45
         factors.append("High pain score reported (7+).")
     elif req.pain_score >= 4:
         score += 25
+        breakdown["pain"] += 25
         factors.append("Moderate pain score reported (4–6).")
     elif req.pain_score >= 1:
         score += 10
+        breakdown["pain"] += 10
         factors.append("Mild pain score reported (1–3).")
 
     # Volume
     if req.weekly_sets >= 120:
         score += 20
+        breakdown["volume"] += 20
         factors.append("Very high weekly training volume (sets).")
     elif req.weekly_sets >= 80:
         score += 12
+        breakdown["volume"] += 12
         factors.append("High weekly training volume (sets).")
 
     # Intensity
     if req.rpe >= 9:
         score += 18
-        factors.append("Very high intensity (RPE 9–10).")
+        breakdown["intensity"] += 18
+        factors.append("Very high insentity  (RPE 9-10).")
     elif req.rpe >= 7:
         score += 10
-        factors.append("High intensity (RPE 7–8).")
+        breakdown["intensity"] += 10
+        factors.append("High intensity(RPE 7-8).")
 
     # Recovery
     if req.sleep_hours < 6:
         score += 12
+        breakdown["sleep"] += 12
         factors.append("Low sleep duration (<6 hours).")
     elif req.sleep_hours < 7:
         score += 6
+        breakdown["sleep"] += 6
         factors.append("Below-optimal sleep duration (6–7 hours).")
 
+    #Reset
     if req.rest_days_per_week <= 1 and req.training_days_per_week >= 5:
         score += 10
+        breakdown["rest"] += 10
         factors.append("Low rest relative to training frequency.")
 
     # Experience adjustment
     if req.experience_level == "beginner" and req.rpe >= 8:
         score += 8
+        breakdown["experience"] += 8
         factors.append("High intensity for beginner level.")
 
     # Cap score to 0–100
@@ -115,6 +136,7 @@ def calculate_risk_and_advice(req: AssessmentRequest) -> AssessmentResponse:
         risk_level=level,
         top_factors=top,
         recommendations=recs,
+        score_breakdown=breakdown,
     )
 
 @app.get("/health")

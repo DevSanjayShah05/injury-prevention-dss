@@ -277,6 +277,26 @@ export default function App() {
   </div>
 </div>
 
+<h3>Score breakdown</h3>
+<ul>
+  {Object.entries(result.score_breakdown)
+    .filter(([_, val]) => val > 0)
+    .map(([key, val]) => (
+      <li key={key}>
+        <strong>
+  {{
+    pain: "Pain",
+    volume: "Weekly training volume",
+    intensity: "Training intensity",
+    sleep: "Sleep",
+    rest: "Rest & recovery",
+    experience: "Experience level",
+  }[key] || key}
+:</strong> +{val}
+      </li>
+    ))}
+</ul>
+
           <h3>Top factors</h3>
           <ul>
             {result.top_factors.map((f, idx) => (
