@@ -17,3 +17,6 @@ frontend/dist/
 
 # Logs
 *.log
+
+# SQLite database (local only)
+backend/assessments.db

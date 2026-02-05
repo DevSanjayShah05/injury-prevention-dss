@@ -3,16 +3,46 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import List, Literal, Dict
 
+import sqlite3
+from datetime import datetime, timezone
+import json
+from pathlib import Path
+
 app = FastAPI(title="Injury Prevention DSS", version="0.1.0")
 
 # CORS so React can call this API
-app.add_middleware(
+app.add_middleware(    
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+DB_PATH = Path(__file__).parent / "assessments.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS assessments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            request_json TEXT NOT NULL,
+            risk_score INTEGER NOT NULL,
+            risk_level TEXT NOT NULL,
+            score_breakdown_json TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+@app.on_event("startup")
+def on_startup():
+    init_db()
+
+
+
 
 class AssessmentRequest(BaseModel):
     training_days_per_week: int = Field(ge=0, le=7)
@@ -31,6 +61,30 @@ class AssessmentResponse(BaseModel):
     top_factors: List[str]
     recommendations: List[str]
     score_breakdown: Dict[str, int]
+
+def log_assessment(req: AssessmentRequest, resp: AssessmentResponse):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+
+    created_at = datetime.now(timezone.utc).isoformat()
+
+    cur.execute(
+        """
+        INSERT INTO assessments (created_at, request_json, risk_score, risk_level, score_breakdown_json)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            created_at,
+            req.model_dump_json(),
+            resp.risk_score,
+            resp.risk_level,
+            json.dumps(resp.score_breakdown),
+        ),
+    )
+
+    conn.commit()
+    conn.close()
+
 def calculate_risk_and_advice(req: AssessmentRequest) -> AssessmentResponse:
     score = 0
     factors: List[str] = []
@@ -72,11 +126,11 @@ def calculate_risk_and_advice(req: AssessmentRequest) -> AssessmentResponse:
     if req.rpe >= 9:
         score += 18
         breakdown["intensity"] += 18
-        factors.append("Very high insentity  (RPE 9-10).")
+        factors.append("Very high insentity (RPE 9-10).")
     elif req.rpe >= 7:
         score += 10
         breakdown["intensity"] += 10
-        factors.append("High intensity(RPE 7-8).")
+        factors.append("High intensity (RPE 7-8).")
 
     # Recovery
     if req.sleep_hours < 6:
@@ -88,7 +142,7 @@ def calculate_risk_and_advice(req: AssessmentRequest) -> AssessmentResponse:
         breakdown["sleep"] += 6
         factors.append("Below-optimal sleep duration (6–7 hours).")
 
-    #Reset
+    #Rest
     if req.rest_days_per_week <= 1 and req.training_days_per_week >= 5:
         score += 10
         breakdown["rest"] += 10
@@ -145,4 +199,6 @@ def health():
 
 @app.post("/assess", response_model=AssessmentResponse)
 def assess(req: AssessmentRequest):
-    return calculate_risk_and_advice(req)
+    resp = calculate_risk_and_advice(req)
+    log_assessment(req, resp)
+    return resp
