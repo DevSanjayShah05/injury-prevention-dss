@@ -14,9 +14,8 @@ import os
 # =========================================
 # App + Config
 # =========================================
-app = FastAPI(title="Injury Prevention DSS", version="0.3.0")
+app = FastAPI(title="Injury Prevention DSS", version="0.3.1")
 
-# CORS so React can call this API
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -27,7 +26,7 @@ app.add_middleware(
 
 DB_PATH = Path(__file__).parent / "assessments.db"
 
-# Ollama config (local)
+# Ollama config
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
 OLLAMA_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT", "90"))
@@ -98,11 +97,19 @@ class AssessmentResponse(BaseModel):
     score_breakdown: Dict[str, int]
 
 
+# ✅ Structured coach schema your frontend can render easily
+class AICoachStructured(BaseModel):
+    risk_level_summary: str
+    top_drivers: List[str]
+    seven_day_plan: Dict[str, List[str]]  # keep/reduce/add lists
+    red_flags: List[str]
+
+
 class AICoachResponse(BaseModel):
-    coach_notes: str
-    structured: Dict[str, object]
+    mode: Literal["ollama", "fallback"]
     model_used: str
-    mode: Literal["ollama", "fallback"] = "ollama"
+    coach: AICoachStructured
+    raw_text: Optional[str] = None  # store raw ollama response (debug)
 
 
 class DashboardSummary(BaseModel):
@@ -150,7 +157,6 @@ def log_assessment(req: AssessmentRequest, resp: AssessmentResponse):
             json.dumps(resp.score_breakdown),
         ),
     )
-
     conn.commit()
     conn.close()
 
@@ -246,7 +252,6 @@ def calculate_risk_and_advice(req: AssessmentRequest) -> AssessmentResponse:
         recs.append("Aim for 7–9 hours of sleep to improve recovery and reduce risk.")
     if req.rest_days_per_week <= 1 and req.training_days_per_week >= 5:
         recs.append("Add 1 additional rest day this week to improve recovery capacity.")
-
     if not recs:
         recs.append("Maintain current plan; progress gradually and monitor discomfort.")
 
@@ -262,9 +267,9 @@ def calculate_risk_and_advice(req: AssessmentRequest) -> AssessmentResponse:
 
 
 # =========================================
-# AI Coach - Fallback (deterministic)
+# Coach fallback (deterministic structured)
 # =========================================
-def build_fallback_structured(req: AssessmentRequest, resp: AssessmentResponse) -> Dict[str, object]:
+def build_fallback_structured(req: AssessmentRequest, resp: AssessmentResponse) -> AICoachStructured:
     if resp.risk_level == "high":
         vol_cut = "25–40%"
         rpe_target = "5–6"
@@ -278,6 +283,28 @@ def build_fallback_structured(req: AssessmentRequest, resp: AssessmentResponse) 
         rpe_target = "6–8 (avoid frequent max effort)"
         rest_note = "Keep current rest schedule"
 
+    keep = [
+        "Warm-up 8–10 minutes + 2 light ramp-up sets for main lifts",
+        "Technique-first reps; stop 1–3 reps before failure on most sets",
+    ]
+
+    reduce = [
+        f"Reduce weekly sets by ~{vol_cut}",
+        f"Keep intensity around RPE {rpe_target}",
+        "Avoid grinders, forced reps, and high-fatigue finishers",
+    ]
+    if req.training_days_per_week >= 5:
+        reduce.append("Consider dropping 1 training day this week (temporarily)")
+
+    add = [
+        rest_note,
+        "Add 10 minutes mobility/activation after training (hips/shoulders/core)",
+    ]
+    if req.sleep_hours < 7:
+        add.insert(1, "Sleep goal: 7–9 hours (even +45–60 minutes helps)")
+    else:
+        add.insert(1, "Keep sleep consistent; avoid large late-night variability")
+
     red_flags = [
         "Pain rising session-to-session",
         "Sharp pain",
@@ -288,73 +315,18 @@ def build_fallback_structured(req: AssessmentRequest, resp: AssessmentResponse) 
     if req.pain_score >= 7:
         red_flags.insert(0, "Pain is very high (7+): stop aggravating movements and consult a licensed clinician.")
 
-    keep = [
-        "Warm-up 8–10 minutes + 2 light ramp-up sets for main lifts",
-        "Technique-first reps; stop 1–3 reps before failure on most sets",
-    ]
-    reduce = [
-        f"Reduce weekly sets by ~{vol_cut}",
-        f"Keep intensity around RPE {rpe_target}",
-        "Avoid grinders, forced reps, and high-fatigue finishers",
-    ]
-    if req.training_days_per_week >= 5:
-        reduce.append("Consider dropping 1 training day this week (temporarily)")
-
-    add = [rest_note, "Add 10 minutes mobility/activation after training (hips/shoulders/core)"]
-    if req.sleep_hours < 7:
-        add.insert(1, "Sleep goal: 7–9 hours (even +45–60 minutes helps)")
-    else:
-        add.insert(1, "Keep sleep consistent; avoid large late-night variability")
-
-    return {
-        "risk_level_summary": f"Risk level: {resp.risk_level.upper()} (score {resp.risk_score}/100).",
-        "top_drivers": resp.top_factors[:3],
-        "seven_day_plan": {"keep": keep, "reduce": reduce, "add": add},
-        "red_flags": red_flags,
-    }
-
-
-def build_fallback_text(structured: Dict[str, object]) -> str:
-    top_drivers = structured.get("top_drivers", [])
-    plan = structured.get("seven_day_plan", {}) or {}
-    keep = plan.get("keep", [])
-    reduce = plan.get("reduce", [])
-    add = plan.get("add", [])
-    red_flags = structured.get("red_flags", [])
-
-    lines: List[str] = []
-    lines.append(str(structured.get("risk_level_summary", "")).strip())
-    lines.append("")
-    lines.append("Top drivers:")
-    for x in top_drivers:
-        lines.append(f"- {x}")
-    lines.append("")
-    lines.append("7-day plan:")
-    lines.append("KEEP:")
-    for x in keep:
-        lines.append(f"- {x}")
-    lines.append("REDUCE:")
-    for x in reduce:
-        lines.append(f"- {x}")
-    lines.append("ADD:")
-    for x in add:
-        lines.append(f"- {x}")
-    lines.append("")
-    lines.append("Red flags:")
-    for x in red_flags:
-        lines.append(f"- {x}")
-
-    return "\n".join(lines).strip()
+    return AICoachStructured(
+        risk_level_summary=f"Risk level: {resp.risk_level.upper()} (score {resp.risk_score}/100).",
+        top_drivers=resp.top_factors[:3],
+        seven_day_plan={"keep": keep, "reduce": reduce, "add": add},
+        red_flags=red_flags,
+    )
 
 
 # =========================================
-# AI Coach - Ollama
+# Ollama Coach (returns structured JSON)
 # =========================================
 def ollama_generate_structured(req: AssessmentRequest, resp: AssessmentResponse) -> Optional[Dict[str, object]]:
-    """
-    Calls Ollama at /api/generate and asks it to return JSON ONLY.
-    If model returns non-JSON, we fallback.
-    """
     schema_hint = {
         "risk_level_summary": "string (1-2 sentences)",
         "top_drivers": ["string", "string", "string"],
@@ -393,7 +365,7 @@ def ollama_generate_structured(req: AssessmentRequest, resp: AssessmentResponse)
     try:
         r = requests.post(
             f"{OLLAMA_BASE_URL}/api/generate",
-            json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False},
+            json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False, "options": {"temperature": 0.2}},
             timeout=OLLAMA_TIMEOUT,
         )
         if not r.ok:
@@ -407,7 +379,10 @@ def ollama_generate_structured(req: AssessmentRequest, resp: AssessmentResponse)
         if not isinstance(parsed, dict):
             return None
 
-        if "seven_day_plan" not in parsed or "top_drivers" not in parsed:
+        # quick sanity checks
+        if "risk_level_summary" not in parsed:
+            return None
+        if "seven_day_plan" not in parsed or not isinstance(parsed["seven_day_plan"], dict):
             return None
 
         return parsed
@@ -438,30 +413,28 @@ def assess(req: AssessmentRequest):
 
 @app.post("/ai/coach", response_model=AICoachResponse)
 def ai_coach(req: AssessmentRequest):
-    """
-    Uses Ollama first. If Ollama fails or returns invalid JSON, fallback deterministic output.
-    """
     resp = calculate_risk_and_advice(req)
 
-    structured = ollama_generate_structured(req, resp)
-    if structured:
-        # Build a readable text version for easy display
-        coach_text = build_fallback_text(structured)
-        return AICoachResponse(
-            coach_notes=coach_text,
-            structured=structured,
-            model_used=OLLAMA_MODEL,
-            mode="ollama",
-        )
+    structured_dict = ollama_generate_structured(req, resp)
+    if structured_dict:
+        try:
+            coach = AICoachStructured(**structured_dict)
+            return AICoachResponse(
+                mode="ollama",
+                model_used=OLLAMA_MODEL,
+                coach=coach,
+                raw_text=json.dumps(structured_dict, ensure_ascii=False),
+            )
+        except Exception:
+            # fall back if schema doesn’t validate
+            pass
 
-    # fallback
-    fallback_struct = build_fallback_structured(req, resp)
-    fallback_text = build_fallback_text(fallback_struct)
+    fallback = build_fallback_structured(req, resp)
     return AICoachResponse(
-        coach_notes=fallback_text,
-        structured=fallback_struct,
-        model_used=OLLAMA_MODEL,
         mode="fallback",
+        model_used=OLLAMA_MODEL,
+        coach=fallback,
+        raw_text=None,
     )
 
 
@@ -547,5 +520,4 @@ def dashboard_recent(limit: int = 10):
                 pain_location=reqj.get("pain_location", "unknown"),
             )
         )
-
     return out

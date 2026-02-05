@@ -4,15 +4,29 @@ const API_BASE = "http://127.0.0.1:8000";
 
 function riskLabel(level) {
   const map = {
-    low: { text: "Low", pill: "bg-emerald-500/15 text-emerald-200 ring-emerald-500/30", dot: "bg-emerald-400" },
-    moderate: { text: "Moderate", pill: "bg-amber-500/15 text-amber-200 ring-amber-500/30", dot: "bg-amber-400" },
-    high: { text: "High", pill: "bg-rose-500/15 text-rose-200 ring-rose-500/30", dot: "bg-rose-400" },
+    low: {
+      text: "Low",
+      pill: "bg-emerald-500/15 text-emerald-200 ring-emerald-500/30",
+      dot: "bg-emerald-400",
+    },
+    moderate: {
+      text: "Moderate",
+      pill: "bg-amber-500/15 text-amber-200 ring-amber-500/30",
+      dot: "bg-amber-400",
+    },
+    high: {
+      text: "High",
+      pill: "bg-rose-500/15 text-rose-200 ring-rose-500/30",
+      dot: "bg-rose-400",
+    },
   };
-  return map[level] || {
-    text: level || "Unknown",
-    pill: "bg-slate-500/15 text-slate-200 ring-slate-500/30",
-    dot: "bg-slate-400",
-  };
+  return (
+    map[level] || {
+      text: level || "Unknown",
+      pill: "bg-slate-500/15 text-slate-200 ring-slate-500/30",
+      dot: "bg-slate-400",
+    }
+  );
 }
 
 function scoreColor(score) {
@@ -38,9 +52,10 @@ export default function App() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
 
-  // AI Coach
+  // ✅ AI Coach (structured)
   const [coachLoading, setCoachLoading] = useState(false);
-  const [coachNotes, setCoachNotes] = useState("");
+  const [coachData, setCoachData] = useState(null);
+  const [coachError, setCoachError] = useState("");
 
   // Dashboard
   const [dash, setDash] = useState({
@@ -72,7 +87,11 @@ export default function App() {
     e.preventDefault();
     setError("");
     setResult(null);
-    setCoachNotes("");
+
+    // ✅ reset coach output when you run a new assessment
+    setCoachData(null);
+    setCoachError("");
+
     setLoading(true);
 
     try {
@@ -98,7 +117,8 @@ export default function App() {
 
   async function getAICoach() {
     setCoachLoading(true);
-    setCoachNotes("");
+    setCoachError("");
+    setCoachData(null);
 
     try {
       const res = await fetch(`${API_BASE}/ai/coach`, {
@@ -113,9 +133,9 @@ export default function App() {
       }
 
       const data = await res.json();
-      setCoachNotes(data.coach_notes);
+      setCoachData(data); // ✅ store entire response (structured)
     } catch (e) {
-      alert(e.message || "Failed to generate AI coaching.");
+      setCoachError(e.message || "Failed to generate AI coaching.");
     } finally {
       setCoachLoading(false);
     }
@@ -212,7 +232,6 @@ export default function App() {
 
               <form onSubmit={handleSubmit} className="mt-5">
                 <div className="grid gap-4 sm:grid-cols-2">
-                  {/* helper for consistent input styles */}
                   <FieldNumber
                     label="Training days / week"
                     min={0}
@@ -269,7 +288,7 @@ export default function App() {
                     <select
                       value={form.pain_location}
                       onChange={(e) => updateField("pain_location", e.target.value)}
-                      className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/40 px-3 py-2 text-sm text-slate-100 outline-none ring-0 transition focus:border-indigo-400/60 focus:outline-none"
+                      className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/40 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-indigo-400/60"
                     >
                       <option value="none">None</option>
                       <option value="shoulder">Shoulder</option>
@@ -286,7 +305,7 @@ export default function App() {
                     <select
                       value={form.experience_level}
                       onChange={(e) => updateField("experience_level", e.target.value)}
-                      className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/40 px-3 py-2 text-sm text-slate-100 outline-none ring-0 transition focus:border-indigo-400/60 focus:outline-none"
+                      className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/40 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-indigo-400/60"
                     >
                       <option value="beginner">Beginner</option>
                       <option value="intermediate">Intermediate</option>
@@ -340,7 +359,9 @@ export default function App() {
                     <p className="text-xs text-slate-300">Your risk score + key drivers.</p>
                   </div>
 
-                  <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs ring-1 ${levelUI.pill}`}>
+                  <span
+                    className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs ring-1 ${levelUI.pill}`}
+                  >
                     <span className={`h-2 w-2 rounded-full ${levelUI.dot}`} />
                     {levelUI.text.toUpperCase()}
                   </span>
@@ -408,13 +429,13 @@ export default function App() {
               </div>
             )}
 
-            {/* AI Coach output */}
+            {/* ✅ AI Coach (Structured Render) */}
             {result && (
               <div className="rounded-2xl border border-white/10 bg-white/5 p-5 shadow-xl shadow-black/20 backdrop-blur">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <h2 className="text-lg font-semibold tracking-tight">AI Coach</h2>
-                    <p className="text-xs text-slate-300">Short explanation + 7-day plan.</p>
+                    <p className="text-xs text-slate-300">Structured coaching plan (7-day).</p>
                   </div>
 
                   <button
@@ -426,17 +447,109 @@ export default function App() {
                   </button>
                 </div>
 
-                <div className="mt-4">
-                  {!coachNotes ? (
-                    <p className="text-sm text-slate-300">
-                      Click “Generate plan” to get a tailored 7-day adjustment plan based on your inputs.
-                    </p>
-                  ) : (
-                    <pre className="whitespace-pre-wrap rounded-xl border border-white/10 bg-slate-950/40 p-4 text-sm leading-relaxed text-slate-100">
-                      {coachNotes}
-                    </pre>
-                  )}
-                </div>
+                {/* Error */}
+                {coachError && (
+                  <div className="mt-4 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-100">
+                    {coachError}
+                  </div>
+                )}
+
+                {/* Empty */}
+                {!coachLoading && !coachData && !coachError && (
+                  <p className="mt-4 text-sm text-slate-300">
+                    Click “Generate plan” to get a tailored 7-day adjustment plan based on your inputs.
+                  </p>
+                )}
+
+                {/* Output */}
+                {coachData?.coach && (
+                  <div className="mt-4 space-y-4">
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-300">
+                      <span className="rounded-full border border-white/10 bg-white/5 px-2 py-1">
+                        Mode: <span className="text-slate-100">{coachData.mode}</span>
+                      </span>
+                      <span className="rounded-full border border-white/10 bg-white/5 px-2 py-1">
+                        Model: <span className="text-slate-100">{coachData.model_used}</span>
+                      </span>
+                    </div>
+
+                    <div className="rounded-xl border border-white/10 bg-slate-950/40 p-4">
+                      <div className="text-sm font-semibold text-slate-100">Summary</div>
+                      <div className="mt-2 text-sm text-slate-200">
+                        {coachData.coach.risk_level_summary}
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-white/10 bg-slate-950/40 p-4">
+                      <div className="text-sm font-semibold text-slate-100">Top drivers</div>
+                      <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-200">
+                        {(coachData.coach.top_drivers || []).map((d, idx) => (
+                          <li key={idx}>{d}</li>
+                        ))}
+                      </ul>
+                    </div>
+
+                    <div className="rounded-xl border border-white/10 bg-slate-950/40 p-4">
+                      <div className="text-sm font-semibold text-slate-100">7-day plan</div>
+
+                      <div className="mt-3 grid gap-4 md:grid-cols-3">
+                        <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                          <div className="text-xs font-semibold uppercase tracking-wide text-emerald-200">
+                            Keep
+                          </div>
+                          <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-200">
+                            {(coachData.coach.seven_day_plan?.keep || []).map((x, idx) => (
+                              <li key={idx}>{x}</li>
+                            ))}
+                          </ul>
+                        </div>
+
+                        <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                          <div className="text-xs font-semibold uppercase tracking-wide text-amber-200">
+                            Reduce
+                          </div>
+                          <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-200">
+                            {(coachData.coach.seven_day_plan?.reduce || []).map((x, idx) => (
+                              <li key={idx}>{x}</li>
+                            ))}
+                          </ul>
+                        </div>
+
+                        <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                          <div className="text-xs font-semibold uppercase tracking-wide text-sky-200">
+                            Add
+                          </div>
+                          <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-200">
+                            {(coachData.coach.seven_day_plan?.add || []).map((x, idx) => (
+                              <li key={idx}>{x}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-rose-500/20 bg-rose-500/10 p-4">
+                      <div className="text-sm font-semibold text-rose-200">Red flags</div>
+                      <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-rose-100/90">
+                        {(coachData.coach.red_flags || []).map((x, idx) => (
+                          <li key={idx}>{x}</li>
+                        ))}
+                      </ul>
+                    </div>
+
+                    {/* Optional: show raw text if present */}
+                    {coachData.raw_text && (
+                      <details className="rounded-xl border border-white/10 bg-slate-950/30 p-3 text-sm text-slate-200">
+                        <summary className="cursor-pointer text-xs text-slate-300">
+                          Debug: raw model output
+                        </summary>
+                        <pre className="mt-2 whitespace-pre-wrap text-xs leading-relaxed">
+                          {coachData.raw_text}
+                        </pre>
+                      </details>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
