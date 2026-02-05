@@ -35,6 +35,10 @@ function scoreColor(score) {
   return "bg-emerald-500";
 }
 
+function clamp(n, min, max) {
+  return Math.max(min, Math.min(max, n));
+}
+
 export default function App() {
   const [form, setForm] = useState({
     training_days_per_week: 4,
@@ -57,14 +61,19 @@ export default function App() {
   const [coachData, setCoachData] = useState(null);
   const [coachError, setCoachError] = useState("");
 
-  // Dashboard
+  // ✅ Dashboard (extended)
   const [dash, setDash] = useState({
     summary: null,
     dist: null,
     pain: [],
     recent: [],
+    aiUsage: null,
+    riskTrend: [],
+    topFactors: [],
+    avgBreakdown: null,
   });
   const [dashLoading, setDashLoading] = useState(false);
+  const [dashError, setDashError] = useState("");
 
   const canSubmit = useMemo(() => {
     return (
@@ -88,7 +97,7 @@ export default function App() {
     setError("");
     setResult(null);
 
-    // ✅ reset coach output when you run a new assessment
+    // reset coach output on new assessment
     setCoachData(null);
     setCoachError("");
 
@@ -133,7 +142,12 @@ export default function App() {
       }
 
       const data = await res.json();
-      setCoachData(data); // ✅ store entire response (structured)
+      setCoachData(data);
+
+      // optional: refresh dashboard after generating coach so ai_usage updates
+      // (only if user already loaded dashboard once)
+      // you can uncomment this if you want auto-refresh:
+      // await loadDashboard();
     } catch (e) {
       setCoachError(e.message || "Failed to generate AI coaching.");
     } finally {
@@ -143,16 +157,43 @@ export default function App() {
 
   async function loadDashboard() {
     setDashLoading(true);
+    setDashError("");
 
     try {
-      const [summaryRes, distRes, painRes, recentRes] = await Promise.all([
+      const [
+        summaryRes,
+        distRes,
+        painRes,
+        recentRes,
+        aiUsageRes,
+        trendRes,
+        topFactorsRes,
+        avgBreakdownRes,
+      ] = await Promise.all([
         fetch(`${API_BASE}/dashboard/summary`),
         fetch(`${API_BASE}/dashboard/risk_distribution`),
         fetch(`${API_BASE}/dashboard/top_pain_locations?limit=5`),
         fetch(`${API_BASE}/dashboard/recent?limit=10`),
+
+        // ✅ new endpoints
+        fetch(`${API_BASE}/dashboard/ai_usage`),
+        fetch(`${API_BASE}/dashboard/risk_trend?days=30`),
+        fetch(`${API_BASE}/dashboard/top_factors?limit=8&days=30`),
+        fetch(`${API_BASE}/dashboard/avg_breakdown?days=30`),
       ]);
 
-      if (!summaryRes.ok || !distRes.ok || !painRes.ok || !recentRes.ok) {
+      const allOk = [
+        summaryRes,
+        distRes,
+        painRes,
+        recentRes,
+        aiUsageRes,
+        trendRes,
+        topFactorsRes,
+        avgBreakdownRes,
+      ].every((r) => r.ok);
+
+      if (!allOk) {
         throw new Error("Dashboard API call failed. Check backend is running.");
       }
 
@@ -161,16 +202,37 @@ export default function App() {
       const pain = await painRes.json();
       const recent = await recentRes.json();
 
-      setDash({ summary, dist, pain, recent });
+      const aiUsage = await aiUsageRes.json();
+      const riskTrend = await trendRes.json();
+      const topFactors = await topFactorsRes.json();
+      const avgBreakdown = await avgBreakdownRes.json();
+
+      setDash({
+        summary,
+        dist,
+        pain,
+        recent,
+        aiUsage,
+        riskTrend,
+        topFactors,
+        avgBreakdown,
+      });
     } catch (e) {
       console.error(e);
-      alert(e.message || "Failed to load dashboard.");
+      setDashError(e.message || "Failed to load dashboard.");
     } finally {
       setDashLoading(false);
     }
   }
 
   const levelUI = result?.risk_level ? riskLabel(result.risk_level) : null;
+
+  // for trend visualization scaling
+  const trendMax = useMemo(() => {
+    if (!dash.riskTrend?.length) return 100;
+    const maxAvg = Math.max(...dash.riskTrend.map((p) => Number(p.avg_risk_score || 0)));
+    return Math.max(10, Math.min(100, Math.ceil(maxAvg)));
+  }, [dash.riskTrend]);
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
@@ -360,10 +422,12 @@ export default function App() {
                   </div>
 
                   <span
-                    className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs ring-1 ${levelUI.pill}`}
+                    className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs ring-1 ${
+                      levelUI?.pill || "bg-slate-500/15 text-slate-200 ring-slate-500/30"
+                    }`}
                   >
-                    <span className={`h-2 w-2 rounded-full ${levelUI.dot}`} />
-                    {levelUI.text.toUpperCase()}
+                    <span className={`h-2 w-2 rounded-full ${levelUI?.dot || "bg-slate-400"}`} />
+                    {(levelUI?.text || "UNKNOWN").toUpperCase()}
                   </span>
                 </div>
 
@@ -429,7 +493,7 @@ export default function App() {
               </div>
             )}
 
-            {/* ✅ AI Coach (Structured Render) */}
+            {/* AI Coach (Structured Render) */}
             {result && (
               <div className="rounded-2xl border border-white/10 bg-white/5 p-5 shadow-xl shadow-black/20 backdrop-blur">
                 <div className="flex items-start justify-between gap-3">
@@ -447,21 +511,18 @@ export default function App() {
                   </button>
                 </div>
 
-                {/* Error */}
                 {coachError && (
                   <div className="mt-4 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-100">
                     {coachError}
                   </div>
                 )}
 
-                {/* Empty */}
                 {!coachLoading && !coachData && !coachError && (
                   <p className="mt-4 text-sm text-slate-300">
                     Click “Generate plan” to get a tailored 7-day adjustment plan based on your inputs.
                   </p>
                 )}
 
-                {/* Output */}
                 {coachData?.coach && (
                   <div className="mt-4 space-y-4">
                     <div className="flex flex-wrap items-center gap-2 text-xs text-slate-300">
@@ -537,7 +598,6 @@ export default function App() {
                       </ul>
                     </div>
 
-                    {/* Optional: show raw text if present */}
                     {coachData.raw_text && (
                       <details className="rounded-xl border border-white/10 bg-slate-950/30 p-3 text-sm text-slate-200">
                         <summary className="cursor-pointer text-xs text-slate-300">
@@ -571,6 +631,13 @@ export default function App() {
                 </button>
               </div>
 
+              {/* dashboard error */}
+              {dashError && (
+                <div className="mt-4 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-100">
+                  {dashError}
+                </div>
+              )}
+
               <div className="mt-4">
                 {!dash.summary ? (
                   <p className="text-sm text-slate-300">
@@ -584,12 +651,80 @@ export default function App() {
                 )}
               </div>
 
+              {/* ✅ NEW: AI usage */}
+              {dash.aiUsage && (
+                <Section title="AI usage">
+                  <div className="mt-2 grid grid-cols-3 gap-2">
+                    <MiniStat label="Ollama" value={dash.aiUsage.ollama ?? 0} tone="emerald" />
+                    <MiniStat label="Fallback" value={dash.aiUsage.fallback ?? 0} tone="amber" />
+                    <MiniStat label="Total" value={dash.aiUsage.total_assessments ?? 0} tone="rose" />
+                  </div>
+                  <p className="mt-2 text-xs text-slate-400">
+                    If these stay at 0, make sure you press <span className="text-slate-200">Generate plan</span> after an assessment.
+                  </p>
+                </Section>
+              )}
+
               {dash.dist && (
                 <Section title="Risk distribution">
                   <div className="mt-2 grid grid-cols-3 gap-2">
                     <MiniStat label="Low" value={dash.dist.low} tone="emerald" />
                     <MiniStat label="Moderate" value={dash.dist.moderate} tone="amber" />
                     <MiniStat label="High" value={dash.dist.high} tone="rose" />
+                  </div>
+                </Section>
+              )}
+
+              {/* ✅ NEW: Risk trend */}
+              {dash.riskTrend?.length > 0 && (
+                <Section title="Risk trend (last 30 days)">
+                  <div className="mt-2 space-y-2">
+                    {dash.riskTrend.slice(-10).map((p) => {
+                      const w = clamp((Number(p.avg_risk_score || 0) / trendMax) * 100, 3, 100);
+                      return (
+                        <div key={p.day} className="flex items-center gap-3">
+                          <div className="w-[86px] shrink-0 text-xs text-slate-400">{p.day}</div>
+                          <div className="h-2 flex-1 overflow-hidden rounded-full bg-white/10">
+                            <div className="h-full bg-indigo-500/70" style={{ width: `${w}%` }} />
+                          </div>
+                          <div className="w-[76px] shrink-0 text-right text-xs text-slate-300">
+                            {Number(p.avg_risk_score).toFixed(1)}{" "}
+                            <span className="text-slate-500">({p.count})</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-2 text-xs text-slate-500">
+                    Showing last 10 days with activity. (Avg risk • count)
+                  </p>
+                </Section>
+              )}
+
+              {/* ✅ NEW: Top factors */}
+              {dash.topFactors?.length > 0 && (
+                <Section title="Top factors (last 30 days)">
+                  <ul className="mt-2 space-y-1 text-sm text-slate-200">
+                    {dash.topFactors.map((t) => (
+                      <li key={t.key} className="flex justify-between gap-3">
+                        <span className="text-slate-200">{t.key}</span>
+                        <span className="text-slate-100">{t.count}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </Section>
+              )}
+
+              {/* ✅ NEW: Avg breakdown */}
+              {dash.avgBreakdown && (
+                <Section title="Avg score breakdown (last 30 days)">
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    <SmallStat label="Pain" value={dash.avgBreakdown.pain} />
+                    <SmallStat label="Volume" value={dash.avgBreakdown.volume} />
+                    <SmallStat label="Intensity" value={dash.avgBreakdown.intensity} />
+                    <SmallStat label="Sleep" value={dash.avgBreakdown.sleep} />
+                    <SmallStat label="Rest" value={dash.avgBreakdown.rest} />
+                    <SmallStat label="Experience" value={dash.avgBreakdown.experience} />
                   </div>
                 </Section>
               )}
@@ -651,7 +786,7 @@ export default function App() {
   );
 }
 
-/* ---------- Small UI helpers (components) ---------- */
+/* ---------- Small UI helpers ---------- */
 
 function FieldNumber({ label, value, onChange, min, max, step }) {
   return (
@@ -684,6 +819,15 @@ function Stat({ label, value }) {
     <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
       <div className="text-xs text-slate-400">{label}</div>
       <div className="mt-1 text-2xl font-semibold tracking-tight text-slate-100">{value}</div>
+    </div>
+  );
+}
+
+function SmallStat({ label, value }) {
+  return (
+    <div className="rounded-xl border border-white/10 bg-slate-950/30 p-3">
+      <div className="text-[11px] text-slate-400">{label}</div>
+      <div className="mt-1 text-base font-semibold text-slate-100">{Number(value ?? 0).toFixed(2)}</div>
     </div>
   );
 }
