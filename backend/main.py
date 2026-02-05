@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import List, Literal, Dict, Optional
@@ -14,7 +14,7 @@ import os
 # =========================================
 # App + Config
 # =========================================
-app = FastAPI(title="Injury Prevention DSS", version="0.3.1")
+app = FastAPI(title="Injury Prevention DSS", version="0.3.2")
 
 app.add_middleware(
     CORSMiddleware,
@@ -38,8 +38,9 @@ OLLAMA_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT", "90"))
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute(
-        """
+
+    # Base table
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS assessments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             created_at TEXT NOT NULL,
@@ -48,8 +49,21 @@ def init_db():
             risk_level TEXT NOT NULL,
             score_breakdown_json TEXT NOT NULL
         )
-        """
-    )
+    """)
+
+    # Add new columns safely (no data loss)
+    cur.execute("PRAGMA table_info(assessments)")
+    cols = {row[1] for row in cur.fetchall()}  # row[1] is column name
+
+    if "ai_mode" not in cols:
+        cur.execute("ALTER TABLE assessments ADD COLUMN ai_mode TEXT")
+
+    if "ai_model" not in cols:
+        cur.execute("ALTER TABLE assessments ADD COLUMN ai_model TEXT")
+
+    if "ai_coach_json" not in cols:
+        cur.execute("ALTER TABLE assessments ADD COLUMN ai_coach_json TEXT")
+
     conn.commit()
     conn.close()
 
@@ -83,9 +97,7 @@ class AssessmentRequest(BaseModel):
     rest_days_per_week: int = Field(ge=0, le=7)
     sleep_hours: float = Field(ge=0, le=16)
     pain_score: int = Field(ge=0, le=10)
-    pain_location: Literal[
-        "none", "shoulder", "wrist", "elbow", "knee", "lower_back", "other"
-    ] = "none"
+    pain_location: Literal["none", "shoulder", "wrist", "elbow", "knee", "lower_back", "other"] = "none"
     experience_level: Literal["beginner", "intermediate", "advanced"]
 
 
@@ -97,7 +109,7 @@ class AssessmentResponse(BaseModel):
     score_breakdown: Dict[str, int]
 
 
-# ✅ Structured coach schema your frontend can render easily
+# Structured coach schema for frontend rendering
 class AICoachStructured(BaseModel):
     risk_level_summary: str
     top_drivers: List[str]
@@ -157,6 +169,34 @@ def log_assessment(req: AssessmentRequest, resp: AssessmentResponse):
             json.dumps(resp.score_breakdown),
         ),
     )
+    conn.commit()
+    conn.close()
+
+
+def save_ai_coach_for_latest_assessment(ai_mode: str, ai_model: str, ai_coach: Dict[str, object]):
+    """
+    Saves AI output to the most recent assessment row.
+    Assumption: UI calls /assess then /ai/coach (your UI does this).
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+
+    cur.execute("SELECT id FROM assessments ORDER BY id DESC LIMIT 1")
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        return
+
+    latest_id = row[0]
+    cur.execute(
+        """
+        UPDATE assessments
+        SET ai_mode = ?, ai_model = ?, ai_coach_json = ?
+        WHERE id = ?
+        """,
+        (ai_mode, ai_model, json.dumps(ai_coach), latest_id),
+    )
+
     conn.commit()
     conn.close()
 
@@ -330,11 +370,7 @@ def ollama_generate_structured(req: AssessmentRequest, resp: AssessmentResponse)
     schema_hint = {
         "risk_level_summary": "string (1-2 sentences)",
         "top_drivers": ["string", "string", "string"],
-        "seven_day_plan": {
-            "keep": ["string"],
-            "reduce": ["string"],
-            "add": ["string"],
-        },
+        "seven_day_plan": {"keep": ["string"], "reduce": ["string"], "add": ["string"]},
         "red_flags": ["string"],
     }
 
@@ -365,7 +401,12 @@ def ollama_generate_structured(req: AssessmentRequest, resp: AssessmentResponse)
     try:
         r = requests.post(
             f"{OLLAMA_BASE_URL}/api/generate",
-            json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False, "options": {"temperature": 0.2}},
+            json={
+                "model": OLLAMA_MODEL,
+                "prompt": prompt,
+                "stream": False,
+                "options": {"temperature": 0.2},
+            },
             timeout=OLLAMA_TIMEOUT,
         )
         if not r.ok:
@@ -379,7 +420,7 @@ def ollama_generate_structured(req: AssessmentRequest, resp: AssessmentResponse)
         if not isinstance(parsed, dict):
             return None
 
-        # quick sanity checks
+        # sanity checks
         if "risk_level_summary" not in parsed:
             return None
         if "seven_day_plan" not in parsed or not isinstance(parsed["seven_day_plan"], dict):
@@ -419,6 +460,14 @@ def ai_coach(req: AssessmentRequest):
     if structured_dict:
         try:
             coach = AICoachStructured(**structured_dict)
+
+            # ✅ SAVE to DB
+            save_ai_coach_for_latest_assessment(
+                ai_mode="ollama",
+                ai_model=OLLAMA_MODEL,
+                ai_coach=coach.model_dump(),
+            )
+
             return AICoachResponse(
                 mode="ollama",
                 model_used=OLLAMA_MODEL,
@@ -426,16 +475,44 @@ def ai_coach(req: AssessmentRequest):
                 raw_text=json.dumps(structured_dict, ensure_ascii=False),
             )
         except Exception:
-            # fall back if schema doesn’t validate
             pass
 
     fallback = build_fallback_structured(req, resp)
+
+    # ✅ SAVE fallback to DB too
+    save_ai_coach_for_latest_assessment(
+        ai_mode="fallback",
+        ai_model=OLLAMA_MODEL,
+        ai_coach=fallback.model_dump(),
+    )
+
     return AICoachResponse(
         mode="fallback",
         model_used=OLLAMA_MODEL,
         coach=fallback,
         raw_text=None,
     )
+
+
+@app.get("/dashboard/ai_usage")
+def dashboard_ai_usage():
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT ai_mode, COUNT(*) AS n
+        FROM assessments
+        WHERE ai_mode IS NOT NULL
+        GROUP BY ai_mode
+    """)
+    rows = cur.fetchall()
+    conn.close()
+
+    out = {"ollama": 0, "fallback": 0}
+    for r in rows:
+        if r["ai_mode"] in out:
+            out[r["ai_mode"]] = int(r["n"])
+    return out
 
 
 @app.get("/dashboard/summary", response_model=DashboardSummary)
@@ -455,13 +532,11 @@ def dashboard_summary():
 def dashboard_risk_distribution():
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute(
-        """
+    cur.execute("""
         SELECT risk_level, COUNT(*) AS n
         FROM assessments
         GROUP BY risk_level
-        """
-    )
+    """)
     rows = cur.fetchall()
     conn.close()
 
@@ -496,15 +571,12 @@ def dashboard_top_pain_locations(limit: int = 5):
 def dashboard_recent(limit: int = 10):
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute(
-        """
+    cur.execute("""
         SELECT id, created_at, request_json, risk_score, risk_level
         FROM assessments
         ORDER BY id DESC
         LIMIT ?
-        """,
-        (max(1, min(limit, 50)),),
-    )
+    """, (max(1, min(limit, 50)),))
     rows = cur.fetchall()
     conn.close()
 
