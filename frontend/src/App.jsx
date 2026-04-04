@@ -56,12 +56,10 @@ export default function App() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
 
-  // ✅ AI Coach (structured)
   const [coachLoading, setCoachLoading] = useState(false);
   const [coachData, setCoachData] = useState(null);
   const [coachError, setCoachError] = useState("");
 
-  // ✅ Dashboard (extended)
   const [dash, setDash] = useState({
     summary: null,
     dist: null,
@@ -96,11 +94,8 @@ export default function App() {
     e.preventDefault();
     setError("");
     setResult(null);
-
-    // reset coach output on new assessment
     setCoachData(null);
     setCoachError("");
-
     setLoading(true);
 
     try {
@@ -143,11 +138,6 @@ export default function App() {
 
       const data = await res.json();
       setCoachData(data);
-
-      // optional: refresh dashboard after generating coach so ai_usage updates
-      // (only if user already loaded dashboard once)
-      // you can uncomment this if you want auto-refresh:
-      // await loadDashboard();
     } catch (e) {
       setCoachError(e.message || "Failed to generate AI coaching.");
     } finally {
@@ -174,8 +164,6 @@ export default function App() {
         fetch(`${API_BASE}/dashboard/risk_distribution`),
         fetch(`${API_BASE}/dashboard/top_pain_locations?limit=5`),
         fetch(`${API_BASE}/dashboard/recent?limit=10`),
-
-        // ✅ new endpoints
         fetch(`${API_BASE}/dashboard/ai_usage`),
         fetch(`${API_BASE}/dashboard/risk_trend?days=30`),
         fetch(`${API_BASE}/dashboard/top_factors?limit=8&days=30`),
@@ -201,7 +189,6 @@ export default function App() {
       const dist = await distRes.json();
       const pain = await painRes.json();
       const recent = await recentRes.json();
-
       const aiUsage = await aiUsageRes.json();
       const riskTrend = await trendRes.json();
       const topFactors = await topFactorsRes.json();
@@ -227,7 +214,6 @@ export default function App() {
 
   const levelUI = result?.risk_level ? riskLabel(result.risk_level) : null;
 
-  // for trend visualization scaling
   const trendMax = useMemo(() => {
     if (!dash.riskTrend?.length) return 100;
     const maxAvg = Math.max(...dash.riskTrend.map((p) => Number(p.avg_risk_score || 0)));
@@ -236,16 +222,13 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
-      {/* subtle background */}
       <div className="pointer-events-none fixed inset-0">
         <div className="absolute -top-24 left-1/2 h-72 w-[48rem] -translate-x-1/2 rounded-full bg-indigo-500/20 blur-3xl" />
         <div className="absolute top-64 left-10 h-64 w-64 rounded-full bg-emerald-500/10 blur-3xl" />
         <div className="absolute bottom-10 right-10 h-72 w-72 rounded-full bg-rose-500/10 blur-3xl" />
       </div>
 
-      {/* content wrapper */}
       <div className="relative mx-auto max-w-6xl px-5 py-8">
-        {/* Nav */}
         <div className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/5 px-5 py-3 backdrop-blur">
           <div className="flex items-center gap-3">
             <span className="h-3 w-3 rounded-full bg-indigo-400 shadow-[0_0_20px_rgba(99,102,241,0.8)]" />
@@ -257,7 +240,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* Hero */}
         <div className="mt-8">
           <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
             Reduce injury risk with smarter training decisions
@@ -268,11 +250,8 @@ export default function App() {
           </p>
         </div>
 
-        {/* Layout */}
         <div className="mt-8 grid gap-6 lg:grid-cols-2">
-          {/* LEFT */}
           <div className="space-y-6">
-            {/* Assessment Card */}
             <div className="rounded-2xl border border-white/10 bg-white/5 p-5 shadow-xl shadow-black/20 backdrop-blur">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
@@ -405,14 +384,12 @@ export default function App() {
               </form>
             </div>
 
-            {/* Error */}
             {error && (
               <div className="rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-100">
                 <span className="font-semibold">Error:</span> {error}
               </div>
             )}
 
-            {/* Result */}
             {result && (
               <div className="rounded-2xl border border-white/10 bg-white/5 p-5 shadow-xl shadow-black/20 backdrop-blur">
                 <div className="flex items-start justify-between gap-3">
@@ -431,7 +408,6 @@ export default function App() {
                   </span>
                 </div>
 
-                {/* Score */}
                 <div className="mt-5">
                   <div className="flex items-center justify-between text-sm">
                     <span className="font-semibold text-slate-200">Risk score</span>
@@ -452,7 +428,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Breakdown */}
                 <Section title="Score breakdown">
                   <ul className="mt-2 space-y-1 text-sm text-slate-200">
                     {Object.entries(result.score_breakdown || {})
@@ -493,7 +468,6 @@ export default function App() {
               </div>
             )}
 
-            {/* AI Coach (Structured Render) */}
             {result && (
               <div className="rounded-2xl border border-white/10 bg-white/5 p-5 shadow-xl shadow-black/20 backdrop-blur">
                 <div className="flex items-start justify-between gap-3">
@@ -614,7 +588,6 @@ export default function App() {
             )}
           </div>
 
-          {/* RIGHT */}
           <div className="space-y-6">
             <div className="rounded-2xl border border-white/10 bg-white/5 p-5 shadow-xl shadow-black/20 backdrop-blur">
               <div className="flex items-start justify-between gap-3">
@@ -631,144 +604,138 @@ export default function App() {
                 </button>
               </div>
 
-              {/* dashboard error */}
               {dashError && (
                 <div className="mt-4 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-100">
                   {dashError}
                 </div>
               )}
 
-              <div className="mt-4">
-                {!dash.summary ? (
+              {!dash.summary ? (
+                <div className="mt-4">
                   <p className="text-sm text-slate-300">
                     Click “Load” to view analytics from your logged assessments.
                   </p>
-                ) : (
+                </div>
+              ) : (
+                <div className="mt-4 space-y-4">
                   <div className="grid grid-cols-2 gap-3">
                     <Stat label="Total assessments" value={dash.summary.total_assessments} />
                     <Stat label="Avg risk score" value={dash.summary.avg_risk_score} />
                   </div>
-                )}
-              </div>
 
-              {/* ✅ NEW: AI usage */}
-              {dash.aiUsage && (
-                <Section title="AI usage">
-                  <div className="mt-2 grid grid-cols-3 gap-2">
-                    <MiniStat label="Ollama" value={dash.aiUsage.ollama ?? 0} tone="emerald" />
-                    <MiniStat label="Fallback" value={dash.aiUsage.fallback ?? 0} tone="amber" />
-                    <MiniStat label="Total" value={dash.aiUsage.total_assessments ?? 0} tone="rose" />
-                  </div>
-                  <p className="mt-2 text-xs text-slate-400">
-                    If these stay at 0, make sure you press <span className="text-slate-200">Generate plan</span> after an assessment.
-                  </p>
-                </Section>
-              )}
+                  {dash.aiUsage && (
+                    <Section title="AI Usage">
+                      <div className="grid grid-cols-3 gap-2">
+                        <MiniStat label="Ollama" value={dash.aiUsage.ollama ?? 0} tone="emerald" />
+                        <MiniStat label="Fallback" value={dash.aiUsage.fallback ?? 0} tone="amber" />
+                        <MiniStat label="Total" value={dash.aiUsage.total_assessments ?? 0} tone="rose" />
+                      </div>
+                    </Section>
+                  )}
 
-              {dash.dist && (
-                <Section title="Risk distribution">
-                  <div className="mt-2 grid grid-cols-3 gap-2">
-                    <MiniStat label="Low" value={dash.dist.low} tone="emerald" />
-                    <MiniStat label="Moderate" value={dash.dist.moderate} tone="amber" />
-                    <MiniStat label="High" value={dash.dist.high} tone="rose" />
-                  </div>
-                </Section>
-              )}
+                  {dash.dist && (
+                    <Section title="Risk Distribution">
+                      <div className="grid grid-cols-3 gap-2">
+                        <MiniStat label="Low" value={dash.dist.low} tone="emerald" />
+                        <MiniStat label="Moderate" value={dash.dist.moderate} tone="amber" />
+                        <MiniStat label="High" value={dash.dist.high} tone="rose" />
+                      </div>
+                    </Section>
+                  )}
 
-              {/* ✅ NEW: Risk trend */}
-              {dash.riskTrend?.length > 0 && (
-                <Section title="Risk trend (last 30 days)">
-                  <div className="mt-2 space-y-2">
-                    {dash.riskTrend.slice(-10).map((p) => {
-                      const w = clamp((Number(p.avg_risk_score || 0) / trendMax) * 100, 3, 100);
-                      return (
-                        <div key={p.day} className="flex items-center gap-3">
-                          <div className="w-[86px] shrink-0 text-xs text-slate-400">{p.day}</div>
-                          <div className="h-2 flex-1 overflow-hidden rounded-full bg-white/10">
-                            <div className="h-full bg-indigo-500/70" style={{ width: `${w}%` }} />
-                          </div>
-                          <div className="w-[76px] shrink-0 text-right text-xs text-slate-300">
-                            {Number(p.avg_risk_score).toFixed(1)}{" "}
-                            <span className="text-slate-500">({p.count})</span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <p className="mt-2 text-xs text-slate-500">
-                    Showing last 10 days with activity. (Avg risk • count)
-                  </p>
-                </Section>
-              )}
+                  {dash.riskTrend?.length > 0 && (
+                    <Section title="Risk Trend (Last 30 Days)">
+                      <div className="space-y-2">
+                        {dash.riskTrend.slice(-10).map((p) => {
+                          const w = clamp((Number(p.avg_risk_score || 0) / trendMax) * 100, 3, 100);
+                          return (
+                            <div key={p.day} className="flex items-center gap-3">
+                              <div className="w-[86px] shrink-0 text-xs text-slate-400">{p.day}</div>
+                              <div className="h-2 flex-1 overflow-hidden rounded-full bg-white/10">
+                                <div className="h-full bg-indigo-500/70" style={{ width: `${w}%` }} />
+                              </div>
+                              <div className="w-[76px] shrink-0 text-right text-xs text-slate-300">
+                                {Number(p.avg_risk_score).toFixed(1)}{" "}
+                                <span className="text-slate-500">({p.count})</span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <p className="mt-2 text-xs text-slate-500">
+                        Showing last 10 days with activity. (Avg risk • count)
+                      </p>
+                    </Section>
+                  )}
 
-              {/* ✅ NEW: Top factors */}
-              {dash.topFactors?.length > 0 && (
-                <Section title="Top factors (last 30 days)">
-                  <ul className="mt-2 space-y-1 text-sm text-slate-200">
-                    {dash.topFactors.map((t) => (
-                      <li key={t.key} className="flex justify-between gap-3">
-                        <span className="text-slate-200">{t.key}</span>
-                        <span className="text-slate-100">{t.count}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </Section>
-              )}
-
-              {/* ✅ NEW: Avg breakdown */}
-              {dash.avgBreakdown && (
-                <Section title="Avg score breakdown (last 30 days)">
-                  <div className="mt-2 grid grid-cols-2 gap-2">
-                    <SmallStat label="Pain" value={dash.avgBreakdown.pain} />
-                    <SmallStat label="Volume" value={dash.avgBreakdown.volume} />
-                    <SmallStat label="Intensity" value={dash.avgBreakdown.intensity} />
-                    <SmallStat label="Sleep" value={dash.avgBreakdown.sleep} />
-                    <SmallStat label="Rest" value={dash.avgBreakdown.rest} />
-                    <SmallStat label="Experience" value={dash.avgBreakdown.experience} />
-                  </div>
-                </Section>
-              )}
-
-              {dash.pain?.length > 0 && (
-                <Section title="Top pain locations">
-                  <ul className="mt-2 space-y-1 text-sm text-slate-200">
-                    {dash.pain.map((p) => (
-                      <li key={p.key} className="flex justify-between">
-                        <span className="text-slate-200">{p.key}</span>
-                        <span className="text-slate-100">{p.count}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </Section>
-              )}
-
-              {dash.recent?.length > 0 && (
-                <Section title="Recent assessments">
-                  <div className="mt-2 overflow-x-auto rounded-xl border border-white/10">
-                    <table className="w-full text-left text-sm">
-                      <thead className="bg-white/5 text-xs text-slate-300">
-                        <tr>
-                          <th className="px-3 py-2">ID</th>
-                          <th className="px-3 py-2">Time (UTC)</th>
-                          <th className="px-3 py-2">Score</th>
-                          <th className="px-3 py-2">Level</th>
-                          <th className="px-3 py-2">Pain</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-white/10">
-                        {dash.recent.map((r) => (
-                          <tr key={r.id} className="hover:bg-white/5">
-                            <td className="px-3 py-2 text-slate-200">{r.id}</td>
-                            <td className="px-3 py-2 text-slate-300">{r.created_at}</td>
-                            <td className="px-3 py-2 text-slate-200">{r.risk_score}</td>
-                            <td className="px-3 py-2 text-slate-200">{r.risk_level}</td>
-                            <td className="px-3 py-2 text-slate-200">{r.pain_location}</td>
-                          </tr>
+                  {dash.topFactors?.length > 0 && (
+                    <Section title="Top Factors (Last 30 Days)">
+                      <ul className="mt-2 space-y-1 text-sm text-slate-200">
+                        {dash.topFactors.map((t) => (
+                          <li key={t.key} className="flex justify-between gap-3">
+                            <span className="text-slate-200">{t.key}</span>
+                            <span className="text-slate-100">{t.count}</span>
+                          </li>
                         ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </Section>
+                      </ul>
+                    </Section>
+                  )}
+
+                  {dash.avgBreakdown && (
+                    <Section title="Avg Score Breakdown (Last 30 Days)">
+                      <div className="grid grid-cols-2 gap-2">
+                        <SmallStat label="Pain" value={dash.avgBreakdown.pain} />
+                        <SmallStat label="Volume" value={dash.avgBreakdown.volume} />
+                        <SmallStat label="Intensity" value={dash.avgBreakdown.intensity} />
+                        <SmallStat label="Sleep" value={dash.avgBreakdown.sleep} />
+                        <SmallStat label="Rest" value={dash.avgBreakdown.rest} />
+                        <SmallStat label="Experience" value={dash.avgBreakdown.experience} />
+                      </div>
+                    </Section>
+                  )}
+
+                  {dash.pain?.length > 0 && (
+                    <Section title="Top Pain Locations">
+                      <ul className="mt-2 space-y-1 text-sm text-slate-200">
+                        {dash.pain.map((p) => (
+                          <li key={p.key} className="flex justify-between">
+                            <span className="text-slate-200">{p.key}</span>
+                            <span className="text-slate-100">{p.count}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </Section>
+                  )}
+
+                  {dash.recent?.length > 0 && (
+                    <Section title="Recent Assessments">
+                      <div className="mt-2 overflow-x-auto rounded-xl border border-white/10">
+                        <table className="w-full text-left text-sm">
+                          <thead className="bg-white/5 text-xs text-slate-300">
+                            <tr>
+                              <th className="px-3 py-2">ID</th>
+                              <th className="px-3 py-2">Time (UTC)</th>
+                              <th className="px-3 py-2">Score</th>
+                              <th className="px-3 py-2">Level</th>
+                              <th className="px-3 py-2">Pain</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-white/10">
+                            {dash.recent.map((r) => (
+                              <tr key={r.id} className="hover:bg-white/5">
+                                <td className="px-3 py-2 text-slate-200">{r.id}</td>
+                                <td className="px-3 py-2 text-slate-300">{r.created_at}</td>
+                                <td className="px-3 py-2 text-slate-200">{r.risk_score}</td>
+                                <td className="px-3 py-2 text-slate-200">{r.risk_level}</td>
+                                <td className="px-3 py-2 text-slate-200">{r.pain_location}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </Section>
+                  )}
+                </div>
               )}
             </div>
 
@@ -785,8 +752,6 @@ export default function App() {
     </div>
   );
 }
-
-/* ---------- Small UI helpers ---------- */
 
 function FieldNumber({ label, value, onChange, min, max, step }) {
   return (

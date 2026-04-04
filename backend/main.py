@@ -11,10 +11,11 @@ import json
 from pathlib import Path
 import os
 
+
 # =========================================
 # App + Config
 # =========================================
-app = FastAPI(title="Injury Prevention DSS", version="0.3.2")
+app = FastAPI(title="Injury Prevention DSS", version="0.4.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -26,10 +27,10 @@ app.add_middleware(
 
 DB_PATH = Path(__file__).parent / "assessments.db"
 
-# Ollama config
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
 OLLAMA_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT", "90"))
+
 
 # =========================================
 # Database helpers
@@ -38,8 +39,8 @@ def init_db():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
 
-    # Base table
-    cur.execute("""
+    cur.execute(
+        """
         CREATE TABLE IF NOT EXISTS assessments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             created_at TEXT NOT NULL,
@@ -48,9 +49,9 @@ def init_db():
             risk_level TEXT NOT NULL,
             score_breakdown_json TEXT NOT NULL
         )
-    """)
+        """
+    )
 
-    # Add new columns safely (no data loss)
     cur.execute("PRAGMA table_info(assessments)")
     cols = {row[1] for row in cur.fetchall()}
 
@@ -90,7 +91,6 @@ def iso_utc_now() -> str:
 
 
 def iso_cutoff_days(days: int) -> str:
-    # Return ISO string for (now - days) in UTC
     dt = datetime.now(timezone.utc) - timedelta(days=max(1, days))
     return dt.isoformat()
 
@@ -106,9 +106,7 @@ class AssessmentRequest(BaseModel):
     rest_days_per_week: int = Field(ge=0, le=7)
     sleep_hours: float = Field(ge=0, le=16)
     pain_score: int = Field(ge=0, le=10)
-    pain_location: Literal[
-        "none", "shoulder", "wrist", "elbow", "knee", "lower_back", "other"
-    ] = "none"
+    pain_location: Literal["none", "shoulder", "wrist", "elbow", "knee", "lower_back", "other"] = "none"
     experience_level: Literal["beginner", "intermediate", "advanced"]
 
 
@@ -120,11 +118,10 @@ class AssessmentResponse(BaseModel):
     score_breakdown: Dict[str, int]
 
 
-# Structured coach schema (frontend-friendly)
 class AICoachStructured(BaseModel):
     risk_level_summary: str
     top_drivers: List[str]
-    seven_day_plan: Dict[str, List[str]]  # keep/reduce/add lists
+    seven_day_plan: Dict[str, List[str]]
     red_flags: List[str]
 
 
@@ -160,7 +157,7 @@ class RecentAssessment(BaseModel):
 
 
 class TrendPoint(BaseModel):
-    day: str  # YYYY-MM-DD
+    day: str
     avg_risk_score: float
     count: int
 
@@ -181,15 +178,19 @@ def log_assessment(req: AssessmentRequest, resp: AssessmentResponse):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
 
-    created_at = iso_utc_now()
-
     cur.execute(
         """
-        INSERT INTO assessments (created_at, request_json, risk_score, risk_level, score_breakdown_json)
+        INSERT INTO assessments (
+            created_at,
+            request_json,
+            risk_score,
+            risk_level,
+            score_breakdown_json
+        )
         VALUES (?, ?, ?, ?, ?)
         """,
         (
-            created_at,
+            iso_utc_now(),
             req.model_dump_json(),
             resp.risk_score,
             resp.risk_level,
@@ -202,10 +203,6 @@ def log_assessment(req: AssessmentRequest, resp: AssessmentResponse):
 
 
 def save_ai_coach_for_latest_assessment(ai_mode: str, ai_model: str, ai_coach: Dict[str, object]):
-    """
-    Saves AI output to the most recent assessment row.
-    Assumption: UI calls /assess then /ai/coach.
-    """
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
 
@@ -242,7 +239,6 @@ def calculate_risk_and_advice(req: AssessmentRequest) -> AssessmentResponse:
         "experience": 0,
     }
 
-    # Pain
     if req.pain_score >= 7:
         score += 45
         breakdown["pain"] += 45
@@ -256,7 +252,6 @@ def calculate_risk_and_advice(req: AssessmentRequest) -> AssessmentResponse:
         breakdown["pain"] += 10
         factors.append("Mild pain score reported (1–3).")
 
-    # Volume
     if req.weekly_sets >= 120:
         score += 20
         breakdown["volume"] += 20
@@ -266,7 +261,6 @@ def calculate_risk_and_advice(req: AssessmentRequest) -> AssessmentResponse:
         breakdown["volume"] += 12
         factors.append("High weekly training volume (sets).")
 
-    # Intensity
     if req.rpe >= 9:
         score += 18
         breakdown["intensity"] += 18
@@ -276,7 +270,6 @@ def calculate_risk_and_advice(req: AssessmentRequest) -> AssessmentResponse:
         breakdown["intensity"] += 10
         factors.append("High intensity (RPE 7–8).")
 
-    # Sleep
     if req.sleep_hours < 6:
         score += 12
         breakdown["sleep"] += 12
@@ -286,13 +279,11 @@ def calculate_risk_and_advice(req: AssessmentRequest) -> AssessmentResponse:
         breakdown["sleep"] += 6
         factors.append("Below-optimal sleep duration (6–7 hours).")
 
-    # Rest
     if req.rest_days_per_week <= 1 and req.training_days_per_week >= 5:
         score += 10
         breakdown["rest"] += 10
         factors.append("Low rest relative to training frequency.")
 
-    # Experience adjustment
     if req.experience_level == "beginner" and req.rpe >= 8:
         score += 8
         breakdown["experience"] += 8
@@ -335,7 +326,7 @@ def calculate_risk_and_advice(req: AssessmentRequest) -> AssessmentResponse:
 
 
 # =========================================
-# Coach fallback (deterministic structured)
+# AI coach
 # =========================================
 def build_fallback_structured(req: AssessmentRequest, resp: AssessmentResponse) -> AICoachStructured:
     if resp.risk_level == "high":
@@ -391,18 +382,11 @@ def build_fallback_structured(req: AssessmentRequest, resp: AssessmentResponse) 
     )
 
 
-# =========================================
-# Ollama Coach (returns structured JSON)
-# =========================================
 def ollama_generate_structured(req: AssessmentRequest, resp: AssessmentResponse) -> Optional[Dict[str, object]]:
     schema_hint = {
         "risk_level_summary": "string (1-2 sentences)",
         "top_drivers": ["string", "string", "string"],
-        "seven_day_plan": {
-            "keep": ["string"],
-            "reduce": ["string"],
-            "add": ["string"],
-        },
+        "seven_day_plan": {"keep": ["string"], "reduce": ["string"], "add": ["string"]},
         "red_flags": ["string"],
     }
 
@@ -451,15 +435,12 @@ def ollama_generate_structured(req: AssessmentRequest, resp: AssessmentResponse)
         parsed = json.loads(raw)
         if not isinstance(parsed, dict):
             return None
-
-        # sanity checks
         if "risk_level_summary" not in parsed:
             return None
         if "seven_day_plan" not in parsed or not isinstance(parsed["seven_day_plan"], dict):
             return None
 
         return parsed
-
     except Exception:
         return None
 
@@ -486,10 +467,6 @@ def assess(req: AssessmentRequest):
 
 @app.post("/ai/coach", response_model=AICoachResponse)
 def ai_coach(req: AssessmentRequest):
-    """
-    Uses Ollama first. If Ollama fails or returns invalid JSON, fallback deterministic output.
-    Also saves AI usage + AI JSON into the latest assessment row.
-    """
     resp = calculate_risk_and_advice(req)
 
     structured_dict = ollama_generate_structured(req, resp)
@@ -504,7 +481,6 @@ def ai_coach(req: AssessmentRequest):
                 raw_text=json.dumps(structured_dict, ensure_ascii=False),
             )
         except Exception:
-            # validation failed -> fallback
             pass
 
     fallback = build_fallback_structured(req, resp)
@@ -517,9 +493,9 @@ def ai_coach(req: AssessmentRequest):
     )
 
 
-# -------------------------
-# Existing dashboard routes
-# -------------------------
+# =========================================
+# Dashboard routes
+# =========================================
 @app.get("/dashboard/summary", response_model=DashboardSummary)
 def dashboard_summary():
     conn = get_conn()
@@ -528,20 +504,23 @@ def dashboard_summary():
     row = cur.fetchone()
     conn.close()
 
-    total = int(row["n"] or 0)
-    avg_score = float(row["avg_score"] or 0.0)
-    return DashboardSummary(total_assessments=total, avg_risk_score=round(avg_score, 2))
+    return DashboardSummary(
+        total_assessments=int(row["n"] or 0),
+        avg_risk_score=round(float(row["avg_score"] or 0.0), 2),
+    )
 
 
 @app.get("/dashboard/risk_distribution", response_model=RiskLevelDistribution)
 def dashboard_risk_distribution():
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         SELECT risk_level, COUNT(*) AS n
         FROM assessments
         GROUP BY risk_level
-    """)
+        """
+    )
     rows = cur.fetchall()
     conn.close()
 
@@ -576,12 +555,15 @@ def dashboard_top_pain_locations(limit: int = 5):
 def dashboard_recent(limit: int = 10):
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         SELECT id, created_at, request_json, risk_score, risk_level
         FROM assessments
         ORDER BY id DESC
         LIMIT ?
-    """, (max(1, min(limit, 50)),))
+        """,
+        (max(1, min(limit, 50)),),
+    )
     rows = cur.fetchall()
     conn.close()
 
@@ -600,24 +582,19 @@ def dashboard_recent(limit: int = 10):
     return out
 
 
-# =========================================
-# NEW: Dashboard analytics endpoints (Phase C)
-# =========================================
-
 @app.get("/dashboard/ai_usage")
 def dashboard_ai_usage():
-    """
-    Counts how many times each AI mode was saved to DB.
-    NOTE: You must call /assess then /ai/coach for this to populate.
-    """
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("""
-        SELECT ai_mode, COUNT(*) as n
+
+    cur.execute(
+        """
+        SELECT ai_mode, COUNT(*) AS n
         FROM assessments
         WHERE ai_mode IS NOT NULL AND ai_mode != ''
         GROUP BY ai_mode
-    """)
+        """
+    )
     rows = cur.fetchall()
 
     cur.execute("SELECT COUNT(*) AS n FROM assessments")
@@ -629,18 +606,18 @@ def dashboard_ai_usage():
         mode = r["ai_mode"]
         if mode in out:
             out[mode] = int(r["n"])
+
     return out
 
 
 @app.get("/dashboard/risk_trend", response_model=List[TrendPoint])
 def dashboard_risk_trend(days: int = 30):
-    """
-    Returns avg risk score per day for last N days.
-    """
     cutoff = iso_cutoff_days(days)
+
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         SELECT substr(created_at, 1, 10) AS day,
                AVG(risk_score) AS avg_score,
                COUNT(*) AS n
@@ -648,29 +625,36 @@ def dashboard_risk_trend(days: int = 30):
         WHERE created_at >= ?
         GROUP BY substr(created_at, 1, 10)
         ORDER BY day ASC
-    """, (cutoff,))
+        """,
+        (cutoff,),
+    )
     rows = cur.fetchall()
     conn.close()
 
     return [
-        TrendPoint(day=r["day"], avg_risk_score=round(float(r["avg_score"]), 2), count=int(r["n"]))
+        TrendPoint(
+            day=r["day"],
+            avg_risk_score=round(float(r["avg_score"]), 2),
+            count=int(r["n"]),
+        )
         for r in rows
     ]
 
 
 @app.get("/dashboard/top_factors", response_model=List[DashboardTopItem])
 def dashboard_top_factors(limit: int = 8, days: int = 30):
-    """
-    Computes top factors frequency by re-running DSS logic on stored request_json.
-    """
     cutoff = iso_cutoff_days(days)
+
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         SELECT request_json
         FROM assessments
         WHERE created_at >= ?
-    """, (cutoff,))
+        """,
+        (cutoff,),
+    )
     rows = cur.fetchall()
     conn.close()
 
@@ -691,17 +675,18 @@ def dashboard_top_factors(limit: int = 8, days: int = 30):
 
 @app.get("/dashboard/avg_breakdown", response_model=AvgBreakdown)
 def dashboard_avg_breakdown(days: int = 30):
-    """
-    Averages the score_breakdown components across assessments in last N days.
-    """
     cutoff = iso_cutoff_days(days)
+
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         SELECT score_breakdown_json
         FROM assessments
         WHERE created_at >= ?
-    """, (cutoff,))
+        """,
+        (cutoff,),
+    )
     rows = cur.fetchall()
     conn.close()
 
