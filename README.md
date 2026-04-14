@@ -1,202 +1,228 @@
-🧠 Injury Prevention Decision Support System (DSS)
+# 🧠 Injury Prevention Decision Support System (DSS)
 
-An AI-assisted web application that helps athletes and fitness enthusiasts assess injury risk, understand contributing factors, and receive actionable training recommendations.
+An AI-powered full-stack application that assesses injury risk and provides personalized training recommendations using rule-based analytics and locally hosted Large Language Models (LLMs).
 
-⸻
+---
 
-📌 Overview
+## 📌 Project Overview
 
-This project is a full-stack Decision Support System (DSS) that combines rule-based risk scoring with AI-generated coaching insights.
+The Injury Prevention DSS is designed to help individuals make safer training decisions by analyzing workout intensity, recovery, and pain indicators.
 
-Users input training, recovery, and pain-related data, and the system:
-	•	Calculates an injury risk score
-	•	Identifies key contributing factors
-	•	Provides structured recommendations
-	•	Generates a personalized 7-day coaching plan using AI
-	•	Tracks historical data and visualizes trends via a dashboard
+The system combines:
+- 📊 Explainable risk scoring (0–100)
+- 🤖 AI-generated coaching using local LLM (Ollama)
+- 📈 Interactive analytics dashboard
+- 🔐 Secure authentication with user-specific data
 
-⸻
+Unlike traditional fitness tools, this system emphasizes **interpretability, privacy, and data-driven decision-making**.
 
-🎯 Problem Statement
+---
 
-Injury risk in training is often overlooked due to:
-	•	Lack of structured tracking
-	•	Poor understanding of training load vs recovery
-	•	No real-time feedback system
+## 🚀 Key Features
 
-This system aims to provide:
+### 🔹 Injury Risk Assessment
+- Computes a risk score (0–100)
+- Categorizes:
+  - Low Risk
+  - Moderate Risk
+  - High Risk
+- Identifies top contributing factors
 
-Data-driven, explainable, and actionable injury risk insights
+---
 
-⸻
+### 🔹 AI Coaching (Ollama Integration)
+- Generates:
+  - Risk explanation
+  - Key contributing factors
+  - 7-day structured training plan
+  - Recovery & safety tips
+- Uses **local LLaMA 3.1 model via Ollama**
+- Includes fallback logic for reliability
 
-💡 Key Features
+---
 
-🔹 Risk Assessment Engine
-	•	Rule-based scoring system (0–100)
-	•	Categorizes risk into:
-	•	Low
-	•	Moderate
-	•	High
-	•	Provides:
-	•	Score breakdown
-	•	Top contributing factors
-	•	Recommendations
+### 🔹 Analytics Dashboard
+- Total assessments
+- Average risk score
+- Risk distribution (Low / Moderate / High)
+- 30-day trend analysis
+- Top contributing factors
+- Pain location insights
+- AI usage tracking (Ollama vs fallback)
 
-⸻
+---
 
-🤖 AI Coaching (Ollama - Local LLM)
-	•	Uses Ollama (llama3.1 model) for local AI inference
-	•	Generates structured output:
-	•	Risk summary
-	•	Top drivers
-	•	7-day training adjustment plan
-	•	Red flags
-	•	Includes fallback logic if AI fails
+### 🔹 Authentication System
+- User Registration & Login
+- JWT-based authentication
+- Password hashing using `pbkdf2_sha256`
+- Each user accesses only their own data
 
-⸻
+---
 
-📊 Dashboard Analytics
-	•	Total assessments
-	•	Average risk score
-	•	Risk distribution
-	•	Top pain locations
-	•	AI usage tracking (Ollama vs fallback)
-	•	Risk trend over time
-	•	Top contributing factors
-	•	Average score breakdown
+## 🏗️ Tech Stack
 
-⸻
+### Frontend
+- React.js (Vite)
+- Tailwind CSS
 
-💾 Data Persistence
-	•	SQLite database
-	•	Stores:
-	•	User inputs
-	•	Risk scores
-	•	AI outputs
-	•	Timestamps
+### Backend
+- FastAPI (Python)
+- SQLite database
 
-⸻
-🏗️ System Architecture
-Frontend (React + Tailwind)
-        ↓
-FastAPI Backend (Python)
-        ↓
-Decision Support Logic (Rule-based)
-        ↓
-AI Layer (Ollama - LLM)
-        ↓
-SQLite Database
+### AI Layer
+- Ollama (Local LLM)
+- Model: `llama3.1:8b`
 
-⸻
-🛠️ Tech Stack
+### Authentication
+- JWT Tokens
+- Passlib (PBKDF2 hashing)
 
-Frontend
-	•	React (Vite)
-	•	Tailwind CSS
+---
 
-Backend
-	•	FastAPI
-	•	Python
+## ⚙️ System Architecture
 
-AI
-	•	Ollama (Local LLM)
-	•	Model: llama3.1
+1. User submits training inputs  
+2. Backend calculates injury risk score  
+3. AI model generates coaching recommendations  
+4. Data stored in SQLite database  
+5. Dashboard aggregates and visualizes insights  
 
-Database
-	•	SQLite
+---
 
-Tools
-	•	Git & GitHub
-	•	VS Code
-	•	Postman / cURL
+## 📂 Project Structure
+injury-prevention-dss/
+│
+├── backend/
+│   ├── main.py
+│   ├── database.db
+│   └── …
+│
+├── frontend/
+│   ├── src/
+│   │   ├── App.jsx
+│   │   └── …
+│   └── package.json
+│
+└── README.md
 
-⸻
+---
 
-⚙️ How to Run Locally
+## ▶️ How to Run the Project
 
-1. Clone the repository
+### 1️⃣ Clone the repository
+```bash
 git clone https://github.com/DevSanjayShah05/injury-prevention-dss.git
 cd injury-prevention-dss
 
-⸻
-
-2. Start Backend
+2️⃣ Backend Setup
 cd backend
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
 
-⸻
+pip install fastapi uvicorn passlib python-jose email-validator requests
 
-3. Start Frontend
+uvicorn main:app --reload
+Backend runs at:
+http://127.0.0.1:8000
+
+Swagger Docs:
+http://127.0.0.1:8000/docs
+
+3️⃣ Frontend Setup
 cd frontend
 npm install
 npm run dev
 
-⸻
-4. Run Ollama (AI)
+Frontend runs at:
+http://localhost:5173
 
-Install Ollama: https://ollama.com
-
-Then run:
-ollama pull llama3.1
+4️⃣ Run AI (Ollama)
+Make sure Ollama is installed and running:
 ollama run llama3.1
 
-🧪 API Endpoints
+🔐 Authentication Flow
+	1.	User registers account
+	2.	Logs in to receive JWT token
+	3.	Token used for API requests
+	4.	Each user sees only their own data
+
+⸻
+
+📊 API Endpoints
+
+Authentication
+	•	POST /auth/register
+	•	POST /auth/login
+	•	GET /auth/me
 
 Core
-	•	POST /assess → Calculate risk
-	•	POST /ai/coach → Generate AI coaching plan
+	•	POST /assess
+	•	POST /ai/coach
 
 Dashboard
 	•	/dashboard/summary
 	•	/dashboard/risk_distribution
+	•	/dashboard/recent
 	•	/dashboard/ai_usage
 	•	/dashboard/risk_trend
 	•	/dashboard/top_factors
 	•	/dashboard/avg_breakdown
 
 ⸻
+⚠️ Challenges & Solutions
+Challenge 									Solution
+AI response inconsistency           Structured prompt engineering
+External API dependency.            Switched to Ollama (local inference)
+Password hashing issues             Used PBKDF2 instead of bcrypt
+Data aggregation complexity         Optimized backend queries
+Frontend styling issues             Migrated to Tailwind CSS
 
-📸 Screenshots
-
-(Add screenshots here for better presentation)
-
-⸻
-
-⚠️ Challenges Faced
-	•	Integrating local AI (Ollama) with structured outputs
-	•	Designing explainable scoring logic
-	•	Handling fallback when AI fails
-	•	Building a responsive and clean UI with Tailwind
-	•	Designing meaningful dashboard analytics
-
-⸻
-
-🔮 Future Improvements
-	•	User authentication & profiles
-	•	Personalized long-term tracking
-	•	ML-based predictive modeling
-	•	Mobile responsiveness improvements
-	•	Deployment (Vercel + Render)
-	•	Exportable reports (PDF)
+🔮 Future Enhancements
+	•	Wearable device integration (heart rate, steps)
+	•	Machine learning-based predictive models
+	•	Personalized recommendation engine
+	•	Cloud deployment (AWS/GCP)
+	•	Mobile application
 
 ⸻
 
-🧾 Conclusion
+🎓 Academic Context
 
-This project demonstrates how AI + rule-based systems can be combined to build a practical, real-world decision support system.
-
-It bridges the gap between:
-	•	Data → Insights → Action
+Developed as part of the MS Information Systems Termination Project
+Binghamton University
 
 ⸻
 
 👨‍💻 Author
 
 Dev Sanjay Shah
-MS Information Systems, Binghamton University
-🔗 GitHub: https://github.com/DevSanjayShah05
-🔗 LinkedIn: https://www.linkedin.com/in/dev-s-shah/
+MS Information Systems
+Binghamton University
+
+📄 License
+
+For academic and research purposes only.
+
+---
+
+# ✅ What makes this strong
+This README now clearly shows:
+- Full-stack skills ✅
+- AI integration ✅
+- Authentication system ✅
+- Analytics dashboard ✅
+- Real-world problem solving ✅
+
+👉 This is **resume + GitHub portfolio level**
+
+---
+
+# 🚀 Next (optional but powerful)
+
+If you want your project to look **next-level professional**, I can help you add:
+- 📸 Screenshots section (very important)
+- 🎥 Demo GIF
+- 🌐 Deploy (Render / Vercel)
+
+Just say **“add screenshots section”** 👍
