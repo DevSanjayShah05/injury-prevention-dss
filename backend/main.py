@@ -1,25 +1,32 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-from typing import List, Literal, Dict, Optional
-
 from collections import Counter
-import requests
-import sqlite3
 from datetime import datetime, timezone, timedelta
 import json
-from pathlib import Path
 import os
+from pathlib import Path
+import sqlite3
+from typing import Dict, List, Literal, Optional
 
+import requests
+from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from jose import JWTError, jwt
+from passlib.context import CryptContext
+from pydantic import BaseModel, EmailStr, Field
 
 # =========================================
 # App + Config
 # =========================================
-app = FastAPI(title="Injury Prevention DSS", version="0.4.0")
+app = FastAPI(title="Injury Prevention DSS", version="0.5.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+    ],
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -31,29 +38,83 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip(
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
 OLLAMA_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT", "90"))
 
+SECRET_KEY = os.getenv("SECRET_KEY", "change-this-to-a-long-random-secret-key")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_HOURS = 24
+
+pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
+
 
 # =========================================
-# Database helpers
+# Helpers
+# =========================================
+def iso_utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def iso_cutoff_days(days: int) -> str:
+    dt = datetime.now(timezone.utc) - timedelta(days=max(1, days))
+    return dt.isoformat()
+
+
+def get_conn() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def safe_json_loads(s: Optional[str]):
+    try:
+        return json.loads(s) if s else {}
+    except Exception:
+        return {}
+
+
+# =========================================
+# Database init / migration
 # =========================================
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
 
+    # Users table
     cur.execute(
         """
-        CREATE TABLE IF NOT EXISTS assessments (
+        CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            created_at TEXT NOT NULL,
-            request_json TEXT NOT NULL,
-            risk_score INTEGER NOT NULL,
-            risk_level TEXT NOT NULL,
-            score_breakdown_json TEXT NOT NULL
+            name TEXT NOT NULL,
+            email TEXT NOT NULL UNIQUE,
+            hashed_password TEXT NOT NULL,
+            created_at TEXT NOT NULL
         )
         """
     )
 
+    # Assessments table
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS assessments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            created_at TEXT NOT NULL,
+            request_json TEXT NOT NULL,
+            risk_score INTEGER NOT NULL,
+            risk_level TEXT NOT NULL,
+            score_breakdown_json TEXT NOT NULL,
+            ai_mode TEXT,
+            ai_model TEXT,
+            ai_coach_json TEXT,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )
+        """
+    )
+
+    # Safe migration for older DBs
     cur.execute("PRAGMA table_info(assessments)")
     cols = {row[1] for row in cur.fetchall()}
+
+    if "user_id" not in cols:
+        cur.execute("ALTER TABLE assessments ADD COLUMN user_id INTEGER")
 
     if "ai_mode" not in cols:
         cur.execute("ALTER TABLE assessments ADD COLUMN ai_mode TEXT")
@@ -73,31 +134,32 @@ def on_startup():
     init_db()
 
 
-def get_conn():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def safe_json_loads(s: str):
-    try:
-        return json.loads(s) if s else {}
-    except Exception:
-        return {}
-
-
-def iso_utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def iso_cutoff_days(days: int) -> str:
-    dt = datetime.now(timezone.utc) - timedelta(days=max(1, days))
-    return dt.isoformat()
-
-
 # =========================================
-# Models
+# Pydantic models
 # =========================================
+class UserRegisterRequest(BaseModel):
+    name: str
+    email: EmailStr
+    password: str
+
+
+class UserLoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class UserResponse(BaseModel):
+    id: int
+    name: str
+    email: EmailStr
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserResponse
+
+
 class AssessmentRequest(BaseModel):
     training_days_per_week: int = Field(ge=0, le=7)
     session_minutes: int = Field(ge=0, le=300)
@@ -172,60 +234,67 @@ class AvgBreakdown(BaseModel):
 
 
 # =========================================
-# DSS logic
+# Auth helpers
 # =========================================
-def log_assessment(req: AssessmentRequest, resp: AssessmentResponse):
-    conn = sqlite3.connect(DB_PATH)
+def hash_password(password: str) -> str:
+    password = password.strip()
+    if len(password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters long.")
+    return pwd_context.hash(password)
+
+
+def verify_password(password: str, hashed_password: str) -> bool:
+    return pwd_context.verify(password.strip(), hashed_password)
+
+def create_access_token(data: dict) -> str:
+    payload = data.copy()
+    expire = datetime.now(timezone.utc) + timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS)
+    payload["exp"] = expire
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def get_user_by_email(email: str):
+    conn = get_conn()
     cur = conn.cursor()
-
-    cur.execute(
-        """
-        INSERT INTO assessments (
-            created_at,
-            request_json,
-            risk_score,
-            risk_level,
-            score_breakdown_json
-        )
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        (
-            iso_utc_now(),
-            req.model_dump_json(),
-            resp.risk_score,
-            resp.risk_level,
-            json.dumps(resp.score_breakdown),
-        ),
-    )
-
-    conn.commit()
-    conn.close()
-
-
-def save_ai_coach_for_latest_assessment(ai_mode: str, ai_model: str, ai_coach: Dict[str, object]):
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-
-    cur.execute("SELECT id FROM assessments ORDER BY id DESC LIMIT 1")
+    cur.execute("SELECT * FROM users WHERE email = ?", (email,))
     row = cur.fetchone()
-    if not row:
-        conn.close()
-        return
-
-    latest_id = row[0]
-    cur.execute(
-        """
-        UPDATE assessments
-        SET ai_mode = ?, ai_model = ?, ai_coach_json = ?
-        WHERE id = ?
-        """,
-        (ai_mode, ai_model, json.dumps(ai_coach), latest_id),
-    )
-
-    conn.commit()
     conn.close()
+    return row
 
 
+def get_user_by_id(user_id: int):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def get_current_user(authorization: Optional[str] = Header(default=None)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid authorization header")
+
+    token = authorization.split(" ", 1)[1]
+
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("sub")
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="Invalid token")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    user = get_user_by_id(int(user_id))
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+
+    return user
+
+
+# =========================================
+# Core DSS logic
+# =========================================
 def calculate_risk_and_advice(req: AssessmentRequest) -> AssessmentResponse:
     score = 0
     factors: List[str] = []
@@ -323,6 +392,66 @@ def calculate_risk_and_advice(req: AssessmentRequest) -> AssessmentResponse:
         recommendations=recs,
         score_breakdown=breakdown,
     )
+
+
+def log_assessment(req: AssessmentRequest, resp: AssessmentResponse, user_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO assessments (
+            user_id,
+            created_at,
+            request_json,
+            risk_score,
+            risk_level,
+            score_breakdown_json
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            user_id,
+            iso_utc_now(),
+            req.model_dump_json(),
+            resp.risk_score,
+            resp.risk_level,
+            json.dumps(resp.score_breakdown),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def save_ai_coach_for_latest_assessment(user_id: int, ai_mode: str, ai_model: str, ai_coach: Dict[str, object]):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT id
+        FROM assessments
+        WHERE user_id = ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (user_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        return
+
+    latest_id = row[0]
+    cur.execute(
+        """
+        UPDATE assessments
+        SET ai_mode = ?, ai_model = ?, ai_coach_json = ?
+        WHERE id = ?
+        """,
+        (ai_mode, ai_model, json.dumps(ai_coach), latest_id),
+    )
+    conn.commit()
+    conn.close()
 
 
 # =========================================
@@ -446,7 +575,55 @@ def ollama_generate_structured(req: AssessmentRequest, resp: AssessmentResponse)
 
 
 # =========================================
-# Routes
+# Auth routes
+# =========================================
+@app.post("/auth/register", response_model=UserResponse)
+def register_user(req: UserRegisterRequest):
+    existing = get_user_by_email(req.email)
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO users (name, email, hashed_password, created_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (req.name, req.email, hash_password(req.password), iso_utc_now()),
+    )
+    conn.commit()
+    user_id = cur.lastrowid
+    conn.close()
+
+    return UserResponse(id=user_id, name=req.name, email=req.email)
+
+
+@app.post("/auth/login", response_model=TokenResponse)
+def login_user(req: UserLoginRequest):
+    user = get_user_by_email(req.email)
+    if not user or not verify_password(req.password, user["hashed_password"]):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    token = create_access_token({"sub": str(user["id"])})
+
+    return TokenResponse(
+        access_token=token,
+        user=UserResponse(id=user["id"], name=user["name"], email=user["email"]),
+    )
+
+
+@app.get("/auth/me", response_model=UserResponse)
+def get_me(current_user=Depends(get_current_user)):
+    return UserResponse(
+        id=current_user["id"],
+        name=current_user["name"],
+        email=current_user["email"],
+    )
+
+
+# =========================================
+# General routes
 # =========================================
 @app.get("/")
 def root():
@@ -458,22 +635,27 @@ def health():
     return {"status": "ok"}
 
 
+# =========================================
+# Protected assessment / AI routes
+# =========================================
 @app.post("/assess", response_model=AssessmentResponse)
-def assess(req: AssessmentRequest):
+def assess(req: AssessmentRequest, current_user=Depends(get_current_user)):
     resp = calculate_risk_and_advice(req)
-    log_assessment(req, resp)
+    log_assessment(req, resp, current_user["id"])
     return resp
 
 
 @app.post("/ai/coach", response_model=AICoachResponse)
-def ai_coach(req: AssessmentRequest):
+def ai_coach(req: AssessmentRequest, current_user=Depends(get_current_user)):
     resp = calculate_risk_and_advice(req)
 
     structured_dict = ollama_generate_structured(req, resp)
     if structured_dict:
         try:
             coach = AICoachStructured(**structured_dict)
-            save_ai_coach_for_latest_assessment("ollama", OLLAMA_MODEL, structured_dict)
+            save_ai_coach_for_latest_assessment(
+                current_user["id"], "ollama", OLLAMA_MODEL, structured_dict
+            )
             return AICoachResponse(
                 mode="ollama",
                 model_used=OLLAMA_MODEL,
@@ -484,7 +666,9 @@ def ai_coach(req: AssessmentRequest):
             pass
 
     fallback = build_fallback_structured(req, resp)
-    save_ai_coach_for_latest_assessment("fallback", OLLAMA_MODEL, fallback.model_dump())
+    save_ai_coach_for_latest_assessment(
+        current_user["id"], "fallback", OLLAMA_MODEL, fallback.model_dump()
+    )
     return AICoachResponse(
         mode="fallback",
         model_used=OLLAMA_MODEL,
@@ -494,13 +678,16 @@ def ai_coach(req: AssessmentRequest):
 
 
 # =========================================
-# Dashboard routes
+# Protected dashboard routes
 # =========================================
 @app.get("/dashboard/summary", response_model=DashboardSummary)
-def dashboard_summary():
+def dashboard_summary(current_user=Depends(get_current_user)):
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) AS n, AVG(risk_score) AS avg_score FROM assessments")
+    cur.execute(
+        "SELECT COUNT(*) AS n, AVG(risk_score) AS avg_score FROM assessments WHERE user_id = ?",
+        (current_user["id"],),
+    )
     row = cur.fetchone()
     conn.close()
 
@@ -511,15 +698,17 @@ def dashboard_summary():
 
 
 @app.get("/dashboard/risk_distribution", response_model=RiskLevelDistribution)
-def dashboard_risk_distribution():
+def dashboard_risk_distribution(current_user=Depends(get_current_user)):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
         """
         SELECT risk_level, COUNT(*) AS n
         FROM assessments
+        WHERE user_id = ?
         GROUP BY risk_level
-        """
+        """,
+        (current_user["id"],),
     )
     rows = cur.fetchall()
     conn.close()
@@ -534,10 +723,13 @@ def dashboard_risk_distribution():
 
 
 @app.get("/dashboard/top_pain_locations", response_model=List[DashboardTopItem])
-def dashboard_top_pain_locations(limit: int = 5):
+def dashboard_top_pain_locations(limit: int = 5, current_user=Depends(get_current_user)):
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT request_json FROM assessments")
+    cur.execute(
+        "SELECT request_json FROM assessments WHERE user_id = ?",
+        (current_user["id"],),
+    )
     rows = cur.fetchall()
     conn.close()
 
@@ -552,17 +744,18 @@ def dashboard_top_pain_locations(limit: int = 5):
 
 
 @app.get("/dashboard/recent", response_model=List[RecentAssessment])
-def dashboard_recent(limit: int = 10):
+def dashboard_recent(limit: int = 10, current_user=Depends(get_current_user)):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
         """
         SELECT id, created_at, request_json, risk_score, risk_level
         FROM assessments
+        WHERE user_id = ?
         ORDER BY id DESC
         LIMIT ?
         """,
-        (max(1, min(limit, 50)),),
+        (current_user["id"], max(1, min(limit, 50))),
     )
     rows = cur.fetchall()
     conn.close()
@@ -583,7 +776,7 @@ def dashboard_recent(limit: int = 10):
 
 
 @app.get("/dashboard/ai_usage")
-def dashboard_ai_usage():
+def dashboard_ai_usage(current_user=Depends(get_current_user)):
     conn = get_conn()
     cur = conn.cursor()
 
@@ -591,13 +784,17 @@ def dashboard_ai_usage():
         """
         SELECT ai_mode, COUNT(*) AS n
         FROM assessments
-        WHERE ai_mode IS NOT NULL AND ai_mode != ''
+        WHERE user_id = ? AND ai_mode IS NOT NULL AND ai_mode != ''
         GROUP BY ai_mode
-        """
+        """,
+        (current_user["id"],),
     )
     rows = cur.fetchall()
 
-    cur.execute("SELECT COUNT(*) AS n FROM assessments")
+    cur.execute(
+        "SELECT COUNT(*) AS n FROM assessments WHERE user_id = ?",
+        (current_user["id"],),
+    )
     total = int(cur.fetchone()["n"] or 0)
     conn.close()
 
@@ -611,7 +808,7 @@ def dashboard_ai_usage():
 
 
 @app.get("/dashboard/risk_trend", response_model=List[TrendPoint])
-def dashboard_risk_trend(days: int = 30):
+def dashboard_risk_trend(days: int = 30, current_user=Depends(get_current_user)):
     cutoff = iso_cutoff_days(days)
 
     conn = get_conn()
@@ -622,11 +819,11 @@ def dashboard_risk_trend(days: int = 30):
                AVG(risk_score) AS avg_score,
                COUNT(*) AS n
         FROM assessments
-        WHERE created_at >= ?
+        WHERE user_id = ? AND created_at >= ?
         GROUP BY substr(created_at, 1, 10)
         ORDER BY day ASC
         """,
-        (cutoff,),
+        (current_user["id"], cutoff),
     )
     rows = cur.fetchall()
     conn.close()
@@ -642,7 +839,7 @@ def dashboard_risk_trend(days: int = 30):
 
 
 @app.get("/dashboard/top_factors", response_model=List[DashboardTopItem])
-def dashboard_top_factors(limit: int = 8, days: int = 30):
+def dashboard_top_factors(limit: int = 8, days: int = 30, current_user=Depends(get_current_user)):
     cutoff = iso_cutoff_days(days)
 
     conn = get_conn()
@@ -651,9 +848,9 @@ def dashboard_top_factors(limit: int = 8, days: int = 30):
         """
         SELECT request_json
         FROM assessments
-        WHERE created_at >= ?
+        WHERE user_id = ? AND created_at >= ?
         """,
-        (cutoff,),
+        (current_user["id"], cutoff),
     )
     rows = cur.fetchall()
     conn.close()
@@ -674,7 +871,7 @@ def dashboard_top_factors(limit: int = 8, days: int = 30):
 
 
 @app.get("/dashboard/avg_breakdown", response_model=AvgBreakdown)
-def dashboard_avg_breakdown(days: int = 30):
+def dashboard_avg_breakdown(days: int = 30, current_user=Depends(get_current_user)):
     cutoff = iso_cutoff_days(days)
 
     conn = get_conn()
@@ -683,9 +880,9 @@ def dashboard_avg_breakdown(days: int = 30):
         """
         SELECT score_breakdown_json
         FROM assessments
-        WHERE created_at >= ?
+        WHERE user_id = ? AND created_at >= ?
         """,
-        (cutoff,),
+        (current_user["id"], cutoff),
     )
     rows = cur.fetchall()
     conn.close()
