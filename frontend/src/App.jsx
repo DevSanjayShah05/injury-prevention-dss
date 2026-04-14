@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 const API_BASE = "http://127.0.0.1:8000";
 
@@ -39,7 +39,50 @@ function clamp(n, min, max) {
   return Math.max(min, Math.min(max, n));
 }
 
+function getStoredToken() {
+  return localStorage.getItem("token") || "";
+}
+
+function getStoredUser() {
+  try {
+    const raw = localStorage.getItem("user");
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveAuth(token, user) {
+  localStorage.setItem("token", token);
+  localStorage.setItem("user", JSON.stringify(user));
+}
+
+function clearAuth() {
+  localStorage.removeItem("token");
+  localStorage.removeItem("user");
+}
+
+function authHeaders() {
+  const token = getStoredToken();
+  return {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${token}`,
+  };
+}
+
 export default function App() {
+  const [authMode, setAuthMode] = useState("login");
+  const [authForm, setAuthForm] = useState({
+    name: "",
+    email: "",
+    password: "",
+  });
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState("");
+  const [authChecked, setAuthChecked] = useState(false);
+  const [token, setToken] = useState(getStoredToken());
+  const [user, setUser] = useState(getStoredUser());
+
   const [form, setForm] = useState({
     training_days_per_week: 4,
     session_minutes: 60,
@@ -73,6 +116,43 @@ export default function App() {
   const [dashLoading, setDashLoading] = useState(false);
   const [dashError, setDashError] = useState("");
 
+  useEffect(() => {
+    async function verifyUser() {
+      const existingToken = getStoredToken();
+      if (!existingToken) {
+        setAuthChecked(true);
+        return;
+      }
+
+      try {
+        const res = await fetch(`${API_BASE}/auth/me`, {
+          headers: {
+            Authorization: `Bearer ${existingToken}`,
+          },
+        });
+
+        if (!res.ok) {
+          clearAuth();
+          setToken("");
+          setUser(null);
+        } else {
+          const me = await res.json();
+          setToken(existingToken);
+          setUser(me);
+          localStorage.setItem("user", JSON.stringify(me));
+        }
+      } catch {
+        clearAuth();
+        setToken("");
+        setUser(null);
+      } finally {
+        setAuthChecked(true);
+      }
+    }
+
+    verifyUser();
+  }, []);
+
   const canSubmit = useMemo(() => {
     return (
       form.training_days_per_week >= 0 &&
@@ -86,8 +166,101 @@ export default function App() {
     );
   }, [form]);
 
+  const levelUI = result?.risk_level ? riskLabel(result.risk_level) : null;
+
+  const trendMax = useMemo(() => {
+    if (!dash.riskTrend?.length) return 100;
+    const maxAvg = Math.max(...dash.riskTrend.map((p) => Number(p.avg_risk_score || 0)));
+    return Math.max(10, Math.min(100, Math.ceil(maxAvg)));
+  }, [dash.riskTrend]);
+
   function updateField(key, value) {
     setForm((prev) => ({ ...prev, [key]: value }));
+  }
+
+  function updateAuthField(key, value) {
+    setAuthForm((prev) => ({ ...prev, [key]: value }));
+  }
+
+  async function handleAuthSubmit(e) {
+    e.preventDefault();
+    setAuthError("");
+    setAuthLoading(true);
+
+    try {
+      if (authMode === "register") {
+        const registerRes = await fetch(`${API_BASE}/auth/register`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(authForm),
+        });
+
+        if (!registerRes.ok) {
+          const text = await registerRes.text();
+          throw new Error(`Register error ${registerRes.status}: ${text}`);
+        }
+      }
+
+      const loginRes = await fetch(`${API_BASE}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: authForm.email,
+          password: authForm.password,
+        }),
+      });
+
+      if (!loginRes.ok) {
+        const text = await loginRes.text();
+        throw new Error(`Login error ${loginRes.status}: ${text}`);
+      }
+
+      const data = await loginRes.json();
+      saveAuth(data.access_token, data.user);
+      setToken(data.access_token);
+      setUser(data.user);
+      setAuthForm({ name: "", email: "", password: "" });
+      setResult(null);
+      setCoachData(null);
+      setError("");
+      setCoachError("");
+      setDashError("");
+      setDash({
+        summary: null,
+        dist: null,
+        pain: [],
+        recent: [],
+        aiUsage: null,
+        riskTrend: [],
+        topFactors: [],
+        avgBreakdown: null,
+      });
+    } catch (err) {
+      setAuthError(err.message || "Authentication failed.");
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  function handleLogout() {
+    clearAuth();
+    setToken("");
+    setUser(null);
+    setResult(null);
+    setCoachData(null);
+    setError("");
+    setCoachError("");
+    setDashError("");
+    setDash({
+      summary: null,
+      dist: null,
+      pain: [],
+      recent: [],
+      aiUsage: null,
+      riskTrend: [],
+      topFactors: [],
+      avgBreakdown: null,
+    });
   }
 
   async function handleSubmit(e) {
@@ -101,7 +274,7 @@ export default function App() {
     try {
       const res = await fetch(`${API_BASE}/assess`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify(form),
       });
 
@@ -127,7 +300,7 @@ export default function App() {
     try {
       const res = await fetch(`${API_BASE}/ai/coach`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify(form),
       });
 
@@ -160,14 +333,14 @@ export default function App() {
         topFactorsRes,
         avgBreakdownRes,
       ] = await Promise.all([
-        fetch(`${API_BASE}/dashboard/summary`),
-        fetch(`${API_BASE}/dashboard/risk_distribution`),
-        fetch(`${API_BASE}/dashboard/top_pain_locations?limit=5`),
-        fetch(`${API_BASE}/dashboard/recent?limit=10`),
-        fetch(`${API_BASE}/dashboard/ai_usage`),
-        fetch(`${API_BASE}/dashboard/risk_trend?days=30`),
-        fetch(`${API_BASE}/dashboard/top_factors?limit=8&days=30`),
-        fetch(`${API_BASE}/dashboard/avg_breakdown?days=30`),
+        fetch(`${API_BASE}/dashboard/summary`, { headers: authHeaders() }),
+        fetch(`${API_BASE}/dashboard/risk_distribution`, { headers: authHeaders() }),
+        fetch(`${API_BASE}/dashboard/top_pain_locations?limit=5`, { headers: authHeaders() }),
+        fetch(`${API_BASE}/dashboard/recent?limit=10`, { headers: authHeaders() }),
+        fetch(`${API_BASE}/dashboard/ai_usage`, { headers: authHeaders() }),
+        fetch(`${API_BASE}/dashboard/risk_trend?days=30`, { headers: authHeaders() }),
+        fetch(`${API_BASE}/dashboard/top_factors?limit=8&days=30`, { headers: authHeaders() }),
+        fetch(`${API_BASE}/dashboard/avg_breakdown?days=30`, { headers: authHeaders() }),
       ]);
 
       const allOk = [
@@ -182,7 +355,7 @@ export default function App() {
       ].every((r) => r.ok);
 
       if (!allOk) {
-        throw new Error("Dashboard API call failed. Check backend is running.");
+        throw new Error("Dashboard API call failed. Check backend is running and you are logged in.");
       }
 
       const summary = await summaryRes.json();
@@ -212,13 +385,124 @@ export default function App() {
     }
   }
 
-  const levelUI = result?.risk_level ? riskLabel(result.risk_level) : null;
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center px-6">
+        <div className="rounded-2xl border border-white/10 bg-white/5 px-6 py-5 text-sm text-slate-200 backdrop-blur">
+          Checking session...
+        </div>
+      </div>
+    );
+  }
 
-  const trendMax = useMemo(() => {
-    if (!dash.riskTrend?.length) return 100;
-    const maxAvg = Math.max(...dash.riskTrend.map((p) => Number(p.avg_risk_score || 0)));
-    return Math.max(10, Math.min(100, Math.ceil(maxAvg)));
-  }, [dash.riskTrend]);
+  if (!token || !user) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100">
+        <div className="pointer-events-none fixed inset-0">
+          <div className="absolute -top-24 left-1/2 h-72 w-[48rem] -translate-x-1/2 rounded-full bg-indigo-500/20 blur-3xl" />
+          <div className="absolute top-64 left-10 h-64 w-64 rounded-full bg-emerald-500/10 blur-3xl" />
+          <div className="absolute bottom-10 right-10 h-72 w-72 rounded-full bg-rose-500/10 blur-3xl" />
+        </div>
+
+        <div className="relative mx-auto flex min-h-screen max-w-6xl items-center justify-center px-5 py-10">
+          <div className="w-full max-w-md rounded-3xl border border-white/10 bg-white/5 p-6 shadow-2xl shadow-black/30 backdrop-blur">
+            <div className="mb-6 text-center">
+              <h1 className="text-2xl font-semibold tracking-tight">Injury Prevention DSS</h1>
+              <p className="mt-2 text-sm text-slate-300">
+                {authMode === "login"
+                  ? "Login to access your assessments and dashboard."
+                  : "Create an account to keep your assessments private."}
+              </p>
+            </div>
+
+            <div className="mb-5 flex rounded-xl border border-white/10 bg-slate-950/40 p-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthMode("login");
+                  setAuthError("");
+                }}
+                className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition ${
+                  authMode === "login" ? "bg-indigo-500 text-white" : "text-slate-300 hover:bg-white/5"
+                }`}
+              >
+                Login
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthMode("register");
+                  setAuthError("");
+                }}
+                className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition ${
+                  authMode === "register" ? "bg-indigo-500 text-white" : "text-slate-300 hover:bg-white/5"
+                }`}
+              >
+                Register
+              </button>
+            </div>
+
+            <form onSubmit={handleAuthSubmit} className="space-y-4">
+              {authMode === "register" && (
+                <div>
+                  <label className="text-xs font-medium text-slate-200">Full name</label>
+                  <input
+                    type="text"
+                    value={authForm.name}
+                    onChange={(e) => updateAuthField("name", e.target.value)}
+                    required
+                    className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/40 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-indigo-400/60"
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="text-xs font-medium text-slate-200">Email</label>
+                <input
+                  type="email"
+                  value={authForm.email}
+                  onChange={(e) => updateAuthField("email", e.target.value)}
+                  required
+                  className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/40 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-indigo-400/60"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-medium text-slate-200">Password</label>
+                <input
+                  type="password"
+                  value={authForm.password}
+                  onChange={(e) => updateAuthField("password", e.target.value)}
+                  required
+                  className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/40 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-indigo-400/60"
+                />
+              </div>
+
+              {authError && (
+                <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-100">
+                  {authError}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={authLoading}
+                className="w-full rounded-xl bg-indigo-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/20 hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {authLoading
+                  ? authMode === "login"
+                    ? "Logging in..."
+                    : "Creating account..."
+                  : authMode === "login"
+                  ? "Login"
+                  : "Create account"}
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
@@ -229,14 +513,27 @@ export default function App() {
       </div>
 
       <div className="relative mx-auto max-w-6xl px-5 py-8">
-        <div className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/5 px-5 py-3 backdrop-blur">
+        <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/5 px-5 py-3 backdrop-blur">
           <div className="flex items-center gap-3">
             <span className="h-3 w-3 rounded-full bg-indigo-400 shadow-[0_0_20px_rgba(99,102,241,0.8)]" />
-            <div className="font-semibold tracking-tight">Injury Prevention DSS</div>
+            <div>
+              <div className="font-semibold tracking-tight">Injury Prevention DSS</div>
+              <div className="text-xs text-slate-400">Signed in as {user.name}</div>
+            </div>
           </div>
-          <div className="hidden sm:flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-200">
-            <span className="h-2 w-2 rounded-full bg-emerald-400" />
-            Local • {API_BASE}
+
+          <div className="flex items-center gap-3">
+            <div className="hidden sm:flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-200">
+              <span className="h-2 w-2 rounded-full bg-emerald-400" />
+              Local • {API_BASE}
+            </div>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-200 hover:bg-white/10"
+            >
+              Logout
+            </button>
           </div>
         </div>
 
@@ -593,7 +890,7 @@ export default function App() {
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <h2 className="text-lg font-semibold tracking-tight">Dashboard</h2>
-                  <p className="text-xs text-slate-300">Analytics from saved assessments.</p>
+                  <p className="text-xs text-slate-300">Analytics from your saved assessments.</p>
                 </div>
                 <button
                   onClick={loadDashboard}
